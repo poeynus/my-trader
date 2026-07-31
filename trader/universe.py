@@ -65,9 +65,14 @@ class UniverseSelector:
         path.write_text(json.dumps([asdict(x) for x in symbols], ensure_ascii=False, indent=2), encoding="utf-8")
 
     @staticmethod
-    def load(path: Path = Path(".auto-universe.json")) -> List[SymbolConfig]:
+    def load(path: Path = Path(".auto-universe.json"), config: Optional[StrategyConfig] = None) -> List[SymbolConfig]:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return [SymbolConfig(**x) for x in data]
+        symbols = [SymbolConfig(**x) for x in data]
+        if config:
+            symbols = [SymbolConfig(x.market, x.symbol, x.exchange,
+                                    config.default_position_krw if x.market == "kr" else config.default_position_usd)
+                       for x in symbols]
+        return symbols
 
     @classmethod
     def merge_and_save(cls, symbols: List[SymbolConfig], markets: Set[str], path: Path = Path(".auto-universe.json")) -> List[SymbolConfig]:

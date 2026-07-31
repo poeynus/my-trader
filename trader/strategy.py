@@ -38,8 +38,12 @@ class StrategyConfig:
     default_position_usd: float
     min_market_cap_krw: float
     min_market_cap_usd: float
-    max_daily_investment_krw: float
-    max_daily_investment_usd: float
+    max_active_investment_krw: float
+    max_active_investment_usd: float
+    reentry_cooldown_seconds: int
+    max_round_trips_per_symbol: int
+    max_daily_loss_krw: float
+    max_daily_loss_usd: float
     fill_timeout_seconds: int
     max_retries: int
     symbols: List[SymbolConfig]
@@ -66,8 +70,12 @@ class StrategyConfig:
                 default_position_usd=float(data.get("default_position_usd", 500)),
                 min_market_cap_krw=float(data.get("min_market_cap_krw", 100000000000)),
                 min_market_cap_usd=float(data.get("min_market_cap_usd", 1000000000)),
-                max_daily_investment_krw=float(data.get("max_daily_investment_krw", 1500000)),
-                max_daily_investment_usd=float(data.get("max_daily_investment_usd", 1500)),
+                max_active_investment_krw=float(data.get("max_active_investment_krw", data.get("max_daily_investment_krw", 1500000))),
+                max_active_investment_usd=float(data.get("max_active_investment_usd", data.get("max_daily_investment_usd", 1500))),
+                reentry_cooldown_seconds=int(data.get("reentry_cooldown_seconds", 300)),
+                max_round_trips_per_symbol=int(data.get("max_round_trips_per_symbol", 3)),
+                max_daily_loss_krw=float(data.get("max_daily_loss_krw", 10000)),
+                max_daily_loss_usd=float(data.get("max_daily_loss_usd", 10)),
                 fill_timeout_seconds=int(data.get("fill_timeout_seconds", 60)),
                 max_retries=int(data.get("max_retries", 1)),
                 symbols=[SymbolConfig(str(x["market"]).lower(), str(x["symbol"]).upper(),
@@ -92,8 +100,14 @@ class StrategyConfig:
             raise StrategyError("market은 kr/us이고 max_position은 0보다 커야 합니다.")
         if not (1 <= self.selected_per_market <= self.candidates_per_market <= 30):
             raise StrategyError("선정 수는 1 <= selected_per_market <= candidates_per_market <= 30이어야 합니다.")
-        if self.max_daily_investment_krw <= 0 or self.max_daily_investment_usd <= 0:
-            raise StrategyError("일일 투자 한도는 0보다 커야 합니다.")
+        if self.max_active_investment_krw <= 0 or self.max_active_investment_usd <= 0:
+            raise StrategyError("동시 투자 한도는 0보다 커야 합니다.")
+        if not (30 <= self.reentry_cooldown_seconds <= 86400):
+            raise StrategyError("재진입 대기시간은 30~86400초여야 합니다.")
+        if not (1 <= self.max_round_trips_per_symbol <= 20):
+            raise StrategyError("종목별 하루 왕복 횟수는 1~20회여야 합니다.")
+        if self.max_daily_loss_krw <= 0 or self.max_daily_loss_usd <= 0:
+            raise StrategyError("일일 손실 한도는 0보다 커야 합니다.")
         if not (10 <= self.fill_timeout_seconds <= 600 and 0 <= self.max_retries <= 3):
             raise StrategyError("체결 제한시간은 10~600초, 재주문은 0~3회여야 합니다.")
 

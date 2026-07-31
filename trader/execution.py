@@ -30,21 +30,22 @@ class ExecutionManager:
         zone = ZoneInfo("Asia/Seoul") if market == "kr" else ZoneInfo("America/New_York")
         return datetime.now(zone).date().isoformat()
 
-    def _spent(self, market: str) -> float:
-        return _num(self.state["daily_spend"].get(market + ":" + self._day(market)))
-
-    def _record_spend(self, market: str, amount: float) -> None:
-        key = market + ":" + self._day(market)
-        self.state["daily_spend"][key] = self._spent(market) + amount
-        self.state_path.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
+    def _active_exposure(self, market: str) -> float:
+        if market == "kr":
+            rows = self.client.domestic_balance()["positions"]
+            return sum(_num(x.get("hldg_qty")) * _num(x.get("pchs_avg_pric")) for x in rows)
+        rows = self.client.us_balance()["positions"]
+        return sum(_num(x.get("ovrs_cblc_qty")) * _num(x.get("pchs_avg_pric")) for x in rows)
 
     def execute_buy(self, item: SymbolConfig, quantity: int, price: float, confirmed: bool) -> Dict[str, Any]:
         market = item.market
-        limit = self.config.max_daily_investment_krw if market == "kr" else self.config.max_daily_investment_usd
-        remaining_budget = limit - self._spent(market)
+        # 이 값은 장중 누적 매수액이 아니라 동시에 보유할 수 있는 원가 한도다.
+        # 매도가 체결되어 잔고에서 빠지면 그만큼 다음 진입에 다시 사용할 수 있다.
+        limit = self.config.max_active_investment_krw if market == "kr" else self.config.max_active_investment_usd
+        remaining_budget = limit - self._active_exposure(market)
         quantity = min(quantity, int(remaining_budget // price))
         if quantity < 1:
-            raise SafetyError("일일 신규투자 한도를 모두 사용했거나 1주 매수금액보다 적습니다.")
+            raise SafetyError("동시 투자 한도를 모두 사용했거나 남은 한도가 1주 매수금액보다 적습니다.")
         power = self.client.domestic_buying_power(item.symbol, price) if market == "kr" else self.client.us_buying_power(item.symbol, item.exchange, price)
         if market == "kr":
             available = int(_num(power.get("nrcvb_buy_qty")))
@@ -54,8 +55,6 @@ class ExecutionManager:
         if quantity < 1:
             raise SafetyError("계좌의 주문 가능 수량이 0주입니다. 예수금과 통합증거금을 확인하세요.")
         result = self._submit_and_track(item, "buy", quantity, price, confirmed)
-        if result["filled_quantity"] > 0:
-            self._record_spend(market, result["filled_quantity"] * result["average_price"])
         return result
 
     def execute_sell(self, item: SymbolConfig, quantity: int, price: float, confirmed: bool) -> Dict[str, Any]:

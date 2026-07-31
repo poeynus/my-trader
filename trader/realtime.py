@@ -115,6 +115,10 @@ class RealtimeExitMonitor:
                 order = await asyncio.to_thread(self.client.us_order, "sell", symbol, item.exchange, quantity, limit_price, confirm_live)
             event = {"time": datetime.now(timezone.utc).isoformat(), "market": market, "symbol": symbol,
                      "action": "sell", "reason": reason, "profit_percent": profit, "price": executable, "order": order}
+            filled = int(order.get("filled_quantity", 0)) if self.execution else quantity
+            if filled > 0:
+                exit_price = float(order.get("average_price") or limit_price) if self.execution else limit_price
+                AutoTrader(self.client, self.config).record_exit(item, float(average), filled, exit_price)
         except Exception as exc:
             event = {"time": datetime.now(timezone.utc).isoformat(), "market": market, "symbol": symbol,
                      "action": "order_error", "reason": str(exc), "profit_percent": profit}

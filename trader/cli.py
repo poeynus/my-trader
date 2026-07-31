@@ -91,7 +91,7 @@ def main(argv: Any = None) -> None:
                     selected_market = selector.discover(markets)
                     symbols = selector.merge_and_save(selected_market, markets, universe_path)
                 else:
-                    symbols = selector.load(universe_path)
+                    symbols = selector.load(universe_path, strategy)
                 report_path = DailyReporter(client).generate(args.market, symbols)
                 _print({"report": str(report_path), "selected": [vars(x) for x in symbols if x.market == args.market]})
                 return
@@ -105,7 +105,7 @@ def main(argv: Any = None) -> None:
                 strategy = replace(strategy, symbols=symbols)
             elif strategy.auto_discover:
                 try:
-                    strategy = replace(strategy, symbols=selector.load(universe_path))
+                    strategy = replace(strategy, symbols=selector.load(universe_path, strategy))
                 except (FileNotFoundError, ValueError, json.JSONDecodeError):
                     symbols = selector.discover()
                     selector.save(symbols, universe_path)
