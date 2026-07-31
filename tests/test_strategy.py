@@ -1,9 +1,19 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from trader.strategy import StrategyError, moving_average_signal
+from trader.strategy import StrategyConfig, StrategyError, moving_average_signal
 
 
 class StrategyTests(unittest.TestCase):
+    def test_auto_discover_does_not_require_symbols(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "strategy.json"
+            path.write_text(json.dumps({"auto_discover": True}), encoding="utf-8")
+            config = StrategyConfig.load(path)
+        self.assertEqual(config.symbols, [])
+
     def test_cross_up(self):
         oldest_first = [10, 10, 10, 10, 10, 9, 12]
         result = moving_average_signal(list(reversed(oldest_first)), fast=2, slow=5)

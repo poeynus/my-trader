@@ -72,7 +72,7 @@ class StrategyConfig:
                 max_retries=int(data.get("max_retries", 1)),
                 symbols=[SymbolConfig(str(x["market"]).lower(), str(x["symbol"]).upper(),
                                       str(x.get("exchange", "NASDAQ")).upper(), float(x["max_position"]))
-                         for x in data["symbols"]],
+                         for x in data.get("symbols", [])],
             )
         except FileNotFoundError as exc:
             raise StrategyError(f"전략 설정 파일이 없습니다: {path}") from exc

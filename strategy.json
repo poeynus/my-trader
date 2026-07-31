@@ -20,9 +20,5 @@
   "max_daily_investment_krw": 200000,
   "max_daily_investment_usd": 140,
   "fill_timeout_seconds": 60,
-  "max_retries": 1,
-  "symbols": [
-    {"market": "kr", "symbol": "005930", "max_position": 60000},
-    {"market": "us", "symbol": "AAPL", "exchange": "NASDAQ", "max_position": 140}
-  ]
+  "max_retries": 1
 }
