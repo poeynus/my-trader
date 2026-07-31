@@ -149,6 +149,15 @@ activemq-data/
 
 # Environments
 .env
+.kis-token.json
+.trader-state.json
+.auto-universe.json
+.scheduler-state.json
+.execution-state.json
+.autopilot-state.json
+.autopilot.lock
+trades.jsonl
+reports/
 .envrc
 .venv
 env/
