@@ -6,7 +6,7 @@ import json
 from dataclasses import replace
 from datetime import datetime, time as clock_time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from .auto import AutoTrader
@@ -49,6 +49,10 @@ class Autopilot:
         self._acquire_lock()
         if self.config.execution_mode == "live" and not self.confirm_live:
             raise SafetyError("live autopilot에는 --confirm-live가 필요합니다.")
+        print(json.dumps({"event": "autopilot_started", "mode": self.config.execution_mode,
+                          "poll_seconds": poll_seconds, "time": datetime.now().astimezone().isoformat()},
+                         ensure_ascii=False), flush=True)
+        last_heartbeat: Optional[datetime] = None
         while True:
             if Path("STOP_TRADING").exists():
                 raise SafetyError("STOP_TRADING 파일이 있어 autopilot을 중지했습니다.")
@@ -56,6 +60,12 @@ class Autopilot:
                 await asyncio.to_thread(self.eod.run_if_due, market)
                 if self._entry_due(market):
                     await self._run_entry(market)
+            now = datetime.now().astimezone()
+            if last_heartbeat is None or (now - last_heartbeat).total_seconds() >= 300:
+                print(json.dumps({"event": "heartbeat", "mode": self.config.execution_mode,
+                                  "time": now.isoformat(), "kr_open": self._entry_due("kr"),
+                                  "us_open": self._entry_due("us")}, ensure_ascii=False), flush=True)
+                last_heartbeat = now
             await asyncio.sleep(poll_seconds)
 
     def _entry_due(self, market: str) -> bool:
