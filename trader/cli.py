@@ -81,7 +81,10 @@ def main(argv: Any = None) -> None:
                 EndOfDayScheduler(client, strategy).run_forever()
                 return
             if args.action == "autopilot":
-                asyncio.run(Autopilot(client, strategy, args.confirm_live).run_forever())
+                try:
+                    asyncio.run(Autopilot(client, strategy, args.confirm_live).run_forever())
+                except KeyboardInterrupt:
+                    _print({"event": "autopilot_stopped", "reason": "keyboard_interrupt"})
                 return
             if args.action in {"report", "eod"}:
                 if not args.market:
@@ -92,7 +95,7 @@ def main(argv: Any = None) -> None:
                     symbols = selector.merge_and_save(selected_market, markets, universe_path)
                 else:
                     symbols = selector.load(universe_path, strategy)
-                report_path = DailyReporter(client).generate(args.market, symbols)
+                report_path = DailyReporter(client, strategy).generate(args.market, symbols)
                 _print({"report": str(report_path), "selected": [vars(x) for x in symbols if x.market == args.market]})
                 return
             if args.action in {"discover", "cycle"}:
@@ -110,7 +113,7 @@ def main(argv: Any = None) -> None:
                     symbols = selector.discover()
                     selector.save(symbols, universe_path)
                     strategy = replace(strategy, symbols=symbols)
-            execution = ExecutionManager(client, strategy) if strategy.execution_mode == "live" else None
+            execution = ExecutionManager(client, strategy) if strategy.has_live_market else None
             auto = AutoTrader(client, strategy, execution=execution)
             if args.action == "screen":
                 screener = HardScreener(client, strategy)

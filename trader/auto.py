@@ -16,6 +16,9 @@ from .execution import ExecutionManager
 
 
 STATE_LOCK = threading.RLock()
+LOG_TIMEZONE = ZoneInfo("Asia/Seoul")
+DAILY_CACHE: Dict[str, tuple[float, Dict[str, object]]] = {}
+SCREEN_CACHE: Dict[str, tuple[float, Any]] = {}
 
 
 class AutoTrader:
@@ -34,6 +37,7 @@ class AutoTrader:
         state.setdefault("virtual_positions", {})
         state.setdefault("last_actions", {})
         state.setdefault("intraday", {})
+        state.setdefault("position_meta", {})
         return state
 
     def _intraday(self, market: str) -> Dict[str, Any]:
@@ -58,22 +62,25 @@ class AutoTrader:
 
     def _log(self, event: Dict[str, Any]) -> None:
         with self.log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"time": datetime.now(timezone.utc).isoformat(), **event}, ensure_ascii=False) + "\n")
+            handle.write(json.dumps({"time": datetime.now(LOG_TIMEZONE).isoformat(), **event}, ensure_ascii=False) + "\n")
 
-    def run_once(self, confirm_live: bool = False) -> List[Dict[str, Any]]:
+    def run_once(self, confirm_live: bool = False, allow_new_entries: bool = True,
+                 force_exit: bool = False) -> List[Dict[str, Any]]:
         with STATE_LOCK:
-            return self._run_once_locked(confirm_live)
+            return self._run_once_locked(confirm_live, allow_new_entries, force_exit)
 
-    def _run_once_locked(self, confirm_live: bool = False) -> List[Dict[str, Any]]:
+    def _run_once_locked(self, confirm_live: bool, allow_new_entries: bool, force_exit: bool) -> List[Dict[str, Any]]:
         if Path("STOP_TRADING").exists():
             raise SafetyError("STOP_TRADING 파일이 있어 자동매매를 중지했습니다.")
-        if self.config.execution_mode == "live" and not confirm_live:
+        live_markets = {x.market for x in self.config.symbols if self.config.mode_for(x.market) == "live"}
+        if live_markets and not confirm_live:
             raise SafetyError("live 자동매매 실행에는 --confirm-live가 필요합니다.")
-        positions = self._live_positions() if self.config.execution_mode == "live" else self.state["virtual_positions"]
+        live_positions = self._live_positions(live_markets) if live_markets else {}
         results = []
         for item in self.config.symbols:
+            positions = live_positions if self.config.mode_for(item.market) == "live" else self.state["virtual_positions"]
             try:
-                result = self._evaluate(item, positions, confirm_live)
+                result = self._evaluate(item, positions, confirm_live, allow_new_entries, force_exit)
             except Exception as exc:
                 result = {"market": item.market, "symbol": item.symbol, "action": "error", "reason": str(exc)}
             self._log(result)
@@ -88,46 +95,86 @@ class AutoTrader:
             print(json.dumps(self.run_once(confirm_live), ensure_ascii=False, indent=2), flush=True)
             time.sleep(interval_seconds)
 
-    def _live_positions(self) -> Dict[str, Dict[str, float]]:
+    def _live_positions(self, markets: Optional[set[str]] = None) -> Dict[str, Dict[str, float]]:
+        markets = markets or {"kr", "us"}
         positions: Dict[str, Dict[str, float]] = {}
-        for row in self.client.domestic_balance()["positions"]:
-            quantity = float(row.get("hldg_qty") or 0)
-            if quantity > 0:
-                positions["kr:" + str(row.get("pdno"))] = {"quantity": quantity, "average_price": float(row.get("pchs_avg_pric") or 0)}
-        for row in self.client.us_balance()["positions"]:
-            quantity = float(row.get("ovrs_cblc_qty") or 0)
-            if quantity > 0:
-                positions["us:" + str(row.get("ovrs_pdno")).upper()] = {"quantity": quantity, "average_price": float(row.get("pchs_avg_pric") or 0)}
+        if "kr" in markets:
+            for row in self.client.domestic_balance()["positions"]:
+                quantity = float(row.get("hldg_qty") or 0)
+                if quantity > 0:
+                    positions["kr:" + str(row.get("pdno"))] = {"quantity": quantity, "average_price": float(row.get("pchs_avg_pric") or 0)}
+        if "us" in markets:
+            for row in self.client.us_balance()["positions"]:
+                quantity = float(row.get("ovrs_cblc_qty") or 0)
+                if quantity > 0:
+                    positions["us:" + str(row.get("ovrs_pdno")).upper()] = {"quantity": quantity, "average_price": float(row.get("pchs_avg_pric") or 0)}
         return positions
 
-    def _evaluate(self, item: SymbolConfig, positions: Dict[str, Any], confirm_live: bool) -> Dict[str, Any]:
+    def _ma(self, item: SymbolConfig) -> Dict[str, object]:
         key = item.market + ":" + item.symbol
+        cached = DAILY_CACHE.get(key)
+        if cached and time.monotonic() - cached[0] < 300:
+            return cached[1]
         if item.market == "kr":
-            current = float(self.client.domestic_quote(item.symbol)["stck_prpr"])
             rows = self.client.domestic_daily_prices(item.symbol, self.config.slow_period + 2)
             closes = [float(x["stck_clpr"]) for x in rows if x.get("stck_clpr")]
         else:
-            current = float(self.client.us_quote(item.symbol, item.exchange)["last"])
             rows = self.client.us_daily_prices(item.symbol, item.exchange, self.config.slow_period + 2)
             closes = [float(x["clos"]) for x in rows if x.get("clos")]
         ma = moving_average_signal(closes, self.config.fast_period, self.config.slow_period)
+        DAILY_CACHE[key] = (time.monotonic(), ma)
+        return ma
+
+    def _screen(self, item: SymbolConfig) -> Any:
+        key = item.market + ":" + item.symbol
+        cached = SCREEN_CACHE.get(key)
+        if cached and time.monotonic() - cached[0] < 900:
+            return cached[1]
+        result = HardScreener(self.client, self.config).screen(item)
+        SCREEN_CACHE[key] = (time.monotonic(), result)
+        return result
+
+    def _evaluate(self, item: SymbolConfig, positions: Dict[str, Any], confirm_live: bool,
+                  allow_new_entries: bool, force_exit: bool) -> Dict[str, Any]:
+        key = item.market + ":" + item.symbol
         position = positions.get(key)
+        if item.market == "kr":
+            current = float(self.client.domestic_quote(item.symbol)["stck_prpr"])
+        else:
+            current = float(self.client.us_quote(item.symbol, item.exchange)["last"])
+        # 마감 청산은 일봉 조회 실패와 무관하게 반드시 주문까지 진행한다.
+        ma = {"signal": "hold", "fast": 0.0, "slow": 0.0} if force_exit and position else self._ma(item)
         action, reason, profit_percent = "hold", str(ma["signal"]), None
         if position:
             average = float(position["average_price"])
             profit_percent = (current / average - 1) * 100 if average else 0
-            if profit_percent >= self.config.take_profit_percent:
+            meta = self.state["position_meta"].setdefault(key, {"opened_at": datetime.now(timezone.utc).isoformat(), "peak_profit_percent": profit_percent})
+            meta["peak_profit_percent"] = max(float(meta.get("peak_profit_percent", profit_percent)), profit_percent)
+            opened_at = datetime.fromisoformat(meta["opened_at"])
+            age_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
+            market_zone = ZoneInfo("Asia/Seoul") if item.market == "kr" else ZoneInfo("America/New_York")
+            overnight = opened_at.astimezone(market_zone).date() < datetime.now(market_zone).date()
+            if force_exit:
+                action, reason = "sell", "market_close"
+            elif overnight:
+                action, reason = "sell", "overnight_exit"
+            elif profit_percent >= self.config.take_profit_percent:
                 action, reason = "sell", "take_profit"
             elif profit_percent <= -self.config.stop_loss_percent:
                 action, reason = "sell", "stop_loss"
+            elif (float(meta["peak_profit_percent"]) >= self.config.trailing_stop_activation_percent
+                  and profit_percent <= float(meta["peak_profit_percent"]) - self.config.trailing_stop_giveback_percent):
+                action, reason = "sell", "trailing_stop"
+            elif age_minutes >= self.config.time_stop_minutes and profit_percent <= -self.config.time_stop_loss_percent:
+                action, reason = "sell", "time_stop"
             elif ma["signal"] == "cross_down":
                 action, reason = "sell", "cross_down"
-        elif float(ma["fast"]) > float(ma["slow"]):
+        elif allow_new_entries and float(ma["fast"]) > float(ma["slow"]):
             # 장기 추세가 상승인 동안에는 청산 후 대기시간을 거쳐 재진입할 수 있다.
             action, reason = "buy", "trend_up"
         base = {"market": item.market, "symbol": item.symbol, "price": current, "profit_percent": profit_percent,
                 "fast_ma": round(float(ma["fast"]), 4), "slow_ma": round(float(ma["slow"]), 4),
-                "action": action, "reason": reason, "mode": self.config.execution_mode}
+                "action": action, "reason": reason, "mode": self.config.mode_for(item.market)}
         if action == "hold":
             return base
         if action == "buy":
@@ -137,27 +184,31 @@ class AutoTrader:
                 return {**base, "action": "hold", "reason": "daily_loss_limit"}
             if int(intraday["round_trips"].get(item.symbol, 0)) >= self.config.max_round_trips_per_symbol:
                 return {**base, "action": "hold", "reason": "round_trip_limit"}
+            if sum(int(x) for x in intraday["round_trips"].values()) >= self.config.max_daily_round_trips_per_market:
+                return {**base, "action": "hold", "reason": "market_round_trip_limit"}
             last_exit = intraday["last_exit"].get(item.symbol)
             if last_exit:
                 elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last_exit)).total_seconds()
                 if elapsed < self.config.reentry_cooldown_seconds:
                     return {**base, "action": "hold", "reason": "reentry_cooldown"}
-            screen = HardScreener(self.client, self.config).screen(item)
+            screen = self._screen(item)
             if not screen.approved:
                 return {**base, "action": "hold", "reason": "screen_rejected:" + ",".join(screen.reasons)}
+        buffer = self.config.limit_buffer_percent / 100
+        estimated_limit_price = current * (1 + buffer if action == "buy" else 1 - buffer)
+        estimated_limit_price = round(estimated_limit_price) if item.market == "kr" else round(estimated_limit_price, 2)
         if action == "buy":
             active_limit = self.config.max_active_investment_krw if item.market == "kr" else self.config.max_active_investment_usd
             active_exposure = sum(float(x["quantity"]) * float(x["average_price"])
                                   for k, x in positions.items() if k.startswith(item.market + ":"))
-            quantity = math.floor(min(item.max_position, max(0, active_limit - active_exposure)) / current)
+            quantity = math.floor(min(item.max_position, max(0, active_limit - active_exposure)) / estimated_limit_price)
         else:
             quantity = int(float(position["quantity"]))
         if quantity < 1:
             return {**base, "action": "hold", "reason": "quantity_is_zero"}
-        buffer = self.config.limit_buffer_percent / 100
-        limit_price = current * (1 + buffer if action == "buy" else 1 - buffer)
-        limit_price = round(limit_price) if item.market == "kr" else round(limit_price, 2)
-        if self.config.execution_mode == "dry_run":
+        limit_price = estimated_limit_price
+        mode = self.config.mode_for(item.market)
+        if mode == "dry_run":
             if action == "buy":
                 positions[key] = {"quantity": quantity, "average_price": limit_price}
             else:
@@ -171,10 +222,18 @@ class AutoTrader:
             order_result = self.client.domestic_order(action, item.symbol, quantity, limit_price, confirm_live)
         else:
             order_result = self.client.us_order(action, item.symbol, item.exchange, quantity, limit_price, confirm_live)
-        filled = quantity if self.config.execution_mode == "dry_run" else int(order_result.get("filled_quantity", 0))
+        filled = quantity if mode == "dry_run" else int(order_result.get("filled_quantity", 0))
+        if action == "buy" and filled > 0:
+            self.state["position_meta"][key] = {"opened_at": datetime.now(timezone.utc).isoformat(), "peak_profit_percent": 0.0}
+            if mode == "live":
+                positions[key] = {"quantity": filled, "average_price": float(order_result.get("average_price") or limit_price)}
         if action == "sell" and filled > 0:
-            exit_price = limit_price if self.config.execution_mode == "dry_run" else float(order_result.get("average_price") or limit_price)
+            exit_price = limit_price if mode == "dry_run" else float(order_result.get("average_price") or limit_price)
             self._record_exit(item, float(position["average_price"]), filled, exit_price)
+            if filled >= quantity:
+                self.state["position_meta"].pop(key, None)
+                if mode == "live":
+                    positions.pop(key, None)
         self.state["last_actions"][key] = [action, reason, datetime.now(timezone.utc).isoformat()]
         self._save_state()
         return {**base, "quantity": quantity, "limit_price": limit_price, "order": order_result}

@@ -46,7 +46,7 @@ class EndOfDayScheduler:
         selector = UniverseSelector(self.client, self.config)
         selected = selector.discover({market})
         merged = selector.merge_and_save(selected, {market})
-        report = DailyReporter(self.client).generate(market, merged)
+        report = DailyReporter(self.client, self.config).generate(market, merged)
         self.state[market] = day
         self.state_path.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"market": market, "date": day, "report": str(report), "selected": len(selected)}, ensure_ascii=False), flush=True)

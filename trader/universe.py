@@ -33,6 +33,30 @@ class UniverseSelector:
                 counts[item.market] += 1
         return selected
 
+    def momentum_candidates(self, market: str) -> List[SymbolConfig]:
+        """장중 순위에서 빠르게 감시 후보를 갱신한다. 실제 진입 전 하드필터와 추세는 다시 확인한다."""
+        ranked: List[tuple[tuple[float, float, float], SymbolConfig]] = []
+        if market == "kr":
+            for row in self.client.domestic_turnover_rank():
+                symbol, price = str(row.get("mksc_shrn_iscd") or ""), float(row.get("stck_prpr") or 0)
+                rate, volume_increase = float(row.get("prdy_ctrt") or 0), float(row.get("vol_inrt") or 0)
+                shares, turnover = float(row.get("lstn_stcn") or 0), float(row.get("acml_tr_pbmn") or 0)
+                if (rate > 0 and len(symbol) == 6 and self.config.min_price_krw <= price <= self.config.default_position_krw
+                        and price * shares >= self.config.min_market_cap_krw):
+                    ranked.append(((rate, volume_increase, turnover), SymbolConfig("kr", symbol, "NASDAQ", self.config.default_position_krw)))
+        else:
+            for exchange in ("NASDAQ", "NYSE", "AMEX"):
+                caps = {str(x.get("symb")): float(x.get("tomv") or x.get("mcap") or 0)
+                        for x in self.client.us_market_cap_rank(exchange)}
+                for row in self.client.us_turnover_rank(exchange):
+                    symbol, price = str(row.get("symb") or "").upper(), float(row.get("last") or 0)
+                    rate, turnover = float(row.get("rate") or 0), float(row.get("tamt") or 0)
+                    if (rate > 0 and symbol in caps and self.config.min_price_usd <= price <= self.config.default_position_usd
+                            and caps[symbol] >= self.config.min_market_cap_usd):
+                        ranked.append(((rate, turnover, 0), SymbolConfig("us", symbol, exchange, self.config.default_position_usd)))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        return [item for _, item in ranked[:self.config.max_monitored_per_market]]
+
     def _trend_up(self, item: SymbolConfig) -> bool:
         days = self.config.slow_period + 2
         if item.market == "kr":

@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from zoneinfo import ZoneInfo
 
 from .auto import AutoTrader
 from .client import KISClient, SafetyError, US_QUOTE_EXCHANGES
 from .strategy import StrategyConfig, SymbolConfig
 from .execution import ExecutionManager
+
+
+LOG_TIMEZONE = ZoneInfo("Asia/Seoul")
 
 
 DOMESTIC_COLUMNS = [
@@ -55,7 +59,7 @@ class RealtimeExitMonitor:
         return [dict(zip(columns, values[i * width:(i + 1) * width])) for i in range(min(count, len(values) // width))]
 
     async def run(self, confirm_live: bool = False) -> None:
-        if self.config.execution_mode != "live" or not confirm_live:
+        if not self.config.has_live_market or not confirm_live:
             raise SafetyError("실시간 자동청산은 live 모드와 --confirm-live가 모두 필요합니다.")
         if Path("STOP_TRADING").exists():
             raise SafetyError("STOP_TRADING 파일이 있어 자동매매를 중지했습니다.")
@@ -113,14 +117,14 @@ class RealtimeExitMonitor:
                 order = await asyncio.to_thread(self.client.domestic_order, "sell", symbol, quantity, limit_price, confirm_live)
             else:
                 order = await asyncio.to_thread(self.client.us_order, "sell", symbol, item.exchange, quantity, limit_price, confirm_live)
-            event = {"time": datetime.now(timezone.utc).isoformat(), "market": market, "symbol": symbol,
+            event = {"time": datetime.now(LOG_TIMEZONE).isoformat(), "market": market, "symbol": symbol,
                      "action": "sell", "reason": reason, "profit_percent": profit, "price": executable, "order": order}
             filled = int(order.get("filled_quantity", 0)) if self.execution else quantity
             if filled > 0:
                 exit_price = float(order.get("average_price") or limit_price) if self.execution else limit_price
                 AutoTrader(self.client, self.config).record_exit(item, float(average), filled, exit_price)
         except Exception as exc:
-            event = {"time": datetime.now(timezone.utc).isoformat(), "market": market, "symbol": symbol,
+            event = {"time": datetime.now(LOG_TIMEZONE).isoformat(), "market": market, "symbol": symbol,
                      "action": "order_error", "reason": str(exc), "profit_percent": profit}
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -25,6 +26,7 @@ class KISClient:
         self.transport = transport or HTTPTransport()
         self._access_token: Optional[str] = None
         self._last_request_at = 0.0
+        self._request_lock = threading.Lock()
 
     def _load_cached_token(self) -> Optional[str]:
         path = self.settings.token_cache_path
@@ -95,18 +97,30 @@ class KISClient:
         }
 
     def _call(self, method: str, path: str, tr_id: str, *, params: Optional[Mapping[str, Any]] = None, body: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
-        wait = self.settings.min_request_interval - (time.monotonic() - self._last_request_at)
-        if wait > 0:
-            time.sleep(wait)
-        self._last_request_at = time.monotonic()
-        response = self.transport.request(
-            method, self.settings.base_url + path, self._headers(tr_id), params=params, body=body,
-            timeout=self.settings.timeout_seconds,
-        )
-        data = response.data
-        if str(data.get("rt_cd", "0")) != "0":
-            raise APIError(str(data.get("msg1", "KIS API 요청 실패")), str(data.get("msg_cd", "")))
-        return data
+        attempts = 3 if method.upper() == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with self._request_lock:
+                    wait = self.settings.min_request_interval - (time.monotonic() - self._last_request_at)
+                    if wait > 0:
+                        time.sleep(wait)
+                    self._last_request_at = time.monotonic()
+                    response = self.transport.request(
+                        method, self.settings.base_url + path, self._headers(tr_id), params=params, body=body,
+                        timeout=self.settings.timeout_seconds,
+                    )
+                data = response.data
+                if str(data.get("rt_cd", "0")) != "0":
+                    raise APIError(str(data.get("msg1", "KIS API 요청 실패")), str(data.get("msg_cd", "")))
+                return data
+            except APIError as exc:
+                message = str(exc).lower()
+                retriable = ("초당 거래건수" in message or "timed out" in message or "연결 실패" in message
+                             or exc.status == 429 or exc.status >= 500)
+                if attempt + 1 >= attempts or not retriable:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        raise APIError("KIS API 재시도에 실패했습니다.")
 
     def domestic_quote(self, symbol: str) -> Dict[str, Any]:
         self._validate_domestic_symbol(symbol)

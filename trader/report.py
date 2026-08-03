@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from .client import KISClient
-from .strategy import SymbolConfig
+from .strategy import StrategyConfig, SymbolConfig
 
 
 def _number(value: Any) -> float:
@@ -23,8 +23,10 @@ def _fmt(value: float, currency: str) -> str:
 
 
 class DailyReporter:
-    def __init__(self, client: KISClient, reports_dir: Path = Path("reports"), trades_path: Path = Path("trades.jsonl")):
-        self.client, self.reports_dir, self.trades_path = client, reports_dir, trades_path
+    def __init__(self, client: KISClient, config: Optional[StrategyConfig] = None,
+                 reports_dir: Path = Path("reports"), trades_path: Path = Path("trades.jsonl"),
+                 state_path: Path = Path(".trader-state.json")):
+        self.client, self.config, self.reports_dir, self.trades_path, self.state_path = client, config, reports_dir, trades_path, state_path
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
     def generate(self, market: str, selected: List[SymbolConfig]) -> Path:
@@ -40,6 +42,9 @@ class DailyReporter:
         return path
 
     def _snapshot(self, market: str, day: str, selected: List[SymbolConfig]) -> Dict[str, Any]:
+        mode = self.config.mode_for(market) if self.config else "live"
+        if mode == "dry_run":
+            return self._virtual_snapshot(market, day, selected)
         balance = self.client.domestic_balance() if market == "kr" else self.client.us_balance()
         positions = []
         for row in balance["positions"]:
@@ -60,10 +65,44 @@ class DailyReporter:
         cost = sum(x["cost"] for x in positions)
         value = sum(x["value"] for x in positions)
         pnl = sum(x["unrealized_pnl"] for x in positions)
+        realized = self._realized_pnl(market, day)
         return {"date": day, "market": market, "currency": "KRW" if market == "kr" else "USD",
                 "selected": [asdict(x) for x in selected if x.market == market], "positions": positions,
                 "metrics": {"position_count": len(positions), "cost": cost, "value": value,
-                            "unrealized_pnl": pnl, "unrealized_return_percent": (pnl / cost * 100 if cost else 0)}}
+                            "unrealized_pnl": pnl, "unrealized_return_percent": (pnl / cost * 100 if cost else 0),
+                            "realized_pnl": realized, "total_pnl": realized + pnl}}
+
+    def _state(self) -> Dict[str, Any]:
+        try:
+            return json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _realized_pnl(self, market: str, day: str) -> float:
+        return _number(self._state().get("intraday", {}).get(market + ":" + day, {}).get("realized_pnl"))
+
+    def _virtual_snapshot(self, market: str, day: str, selected: List[SymbolConfig]) -> Dict[str, Any]:
+        positions = []
+        for key, position in self._state().get("virtual_positions", {}).items():
+            if not key.startswith(market + ":"):
+                continue
+            symbol = key.split(":", 1)[1]
+            item = next((x for x in selected if x.market == market and x.symbol == symbol), None)
+            quote = self.client.domestic_quote(symbol) if market == "kr" else self.client.us_quote(symbol, item.exchange if item else "NASDAQ")
+            current = _number(quote.get("stck_prpr") if market == "kr" else quote.get("last"))
+            quantity, average = _number(position.get("quantity")), _number(position.get("average_price"))
+            cost, value = quantity * average, quantity * current
+            pnl = value - cost
+            positions.append({"symbol": symbol, "name": "(dry-run)", "quantity": quantity, "average_price": average,
+                              "current_price": current, "cost": cost, "value": value, "unrealized_pnl": pnl,
+                              "return_percent": (pnl / cost * 100 if cost else 0)})
+        cost, value = sum(x["cost"] for x in positions), sum(x["value"] for x in positions)
+        pnl, realized = sum(x["unrealized_pnl"] for x in positions), self._realized_pnl(market, day)
+        return {"date": day, "market": market, "currency": "KRW" if market == "kr" else "USD",
+                "selected": [asdict(x) for x in selected if x.market == market], "positions": positions,
+                "metrics": {"position_count": len(positions), "cost": cost, "value": value,
+                            "unrealized_pnl": pnl, "unrealized_return_percent": (pnl / cost * 100 if cost else 0),
+                            "realized_pnl": realized, "total_pnl": realized + pnl}}
 
     def _snapshot_path(self, market: str) -> Path:
         return self.reports_dir / f"snapshots-{market}.json"
@@ -94,7 +133,7 @@ class DailyReporter:
             try:
                 event = json.loads(line)
                 event_day = datetime.fromisoformat(event["time"]).astimezone(timezone).date().isoformat()
-                if event_day == day and event.get("market") == market:
+                if event_day == day and event.get("market") == market and event.get("action") in {"buy", "sell", "error", "order_error"}:
                     events.append(event)
             except (json.JSONDecodeError, KeyError, ValueError):
                 continue
@@ -107,7 +146,9 @@ class DailyReporter:
                  "## 요약", "", "| 항목 | 값 |", "|---|---:|",
                  f"| 보유 종목 | {metrics['position_count']}개 |", f"| 매입금액 | {_fmt(metrics['cost'], currency)} |",
                  f"| 평가금액 | {_fmt(metrics['value'], currency)} |", f"| 미실현 손익 | {_fmt(metrics['unrealized_pnl'], currency)} |",
-                 f"| 미실현 수익률 | {metrics['unrealized_return_percent']:.2f}% |"]
+                 f"| 미실현 수익률 | {metrics['unrealized_return_percent']:.2f}% |",
+                 f"| 확정손익 | {_fmt(metrics.get('realized_pnl', 0), currency)} |",
+                 f"| 합산손익 | {_fmt(metrics.get('total_pnl', metrics['unrealized_pnl']), currency)} |"]
         lines += ["", "## 전일 대비", ""]
         if previous:
             pm = previous["metrics"]
@@ -126,9 +167,13 @@ class DailyReporter:
             lines.append(f"| {x['symbol']} {x['name']} | {x['quantity']:g} | {x['average_price']:,.2f} | {x['current_price']:,.2f} | {_fmt(x['value'], currency)} | {_fmt(x['unrealized_pnl'], currency)} | {x['return_percent']:.2f}% |")
         if not current["positions"]:
             lines.append("| 보유 종목 없음 | - | - | - | - | - | - |")
-        lines += ["", "## 자동매매 이벤트", "", "| 시각(UTC) | 종목 | 행동 | 사유 | 가격 | 수익률 |", "|---|---|---|---|---:|---:|"]
+        lines += ["", "## 자동매매 이벤트", "", "| 시각(KST) | 종목 | 행동 | 사유 | 가격 | 수익률 |", "|---|---|---|---|---:|---:|"]
         for x in events:
-            lines.append(f"| {x.get('time', '')} | {x.get('symbol', '')} | {x.get('action', '')} | {x.get('reason', '')} | {x.get('price', '')} | {x.get('profit_percent', '')} |")
+            try:
+                shown_time = datetime.fromisoformat(x.get("time", "")).astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                shown_time = x.get("time", "")
+            lines.append(f"| {shown_time} | {x.get('symbol', '')} | {x.get('action', '')} | {x.get('reason', '')} | {x.get('price', '')} | {x.get('profit_percent', '')} |")
         if not events:
             lines.append("| 이벤트 없음 | - | - | - | - | - |")
         lines += ["", "> 전일 대비는 장 종료 스냅샷 간 변화입니다. 입출금·환전·수수료·세금이 있으면 순수 매매손익과 다를 수 있습니다.", ""]

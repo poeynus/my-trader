@@ -14,6 +14,11 @@ class StrategyTests(unittest.TestCase):
             config = StrategyConfig.load(path)
         self.assertEqual(config.symbols, [])
 
+    def test_live_markets_override_default_mode(self):
+        config = StrategyConfig.load(Path("strategy.json"))
+        self.assertEqual(config.mode_for("kr"), "live")
+        self.assertEqual(config.mode_for("us"), "live")
+
     def test_cross_up(self):
         oldest_first = [10, 10, 10, 10, 10, 9, 12]
         result = moving_average_signal(list(reversed(oldest_first)), fast=2, slow=5)

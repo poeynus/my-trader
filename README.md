@@ -90,9 +90,14 @@ API 요청은 호출 제한을 피하기 위해 기본 1초 간격으로 실행�
 - `max_active_investment_krw`, `max_active_investment_usd`: 시장별 동시 보유 원가 한도(매도 후 복구)
 - `reentry_cooldown_seconds`: 매도 후 같은 종목 재진입 대기시간
 - `max_round_trips_per_symbol`: 종목별 하루 최대 왕복매매 횟수
+- `max_daily_round_trips_per_market`: 시장별 하루 전체 최대 왕복매매 횟수
 - `max_daily_loss_krw`, `max_daily_loss_usd`: 확정손실 도달 시 당일 신규 진입 중단 한도
+- `live_markets`: 실제 주문을 허용할 시장 목록. 예: `["us"]`
+- `time_stop_minutes`, `time_stop_loss_percent`: 오래 손실인 포지션의 시간 손절
+- `trailing_stop_activation_percent`, `trailing_stop_giveback_percent`: 수익 활성화·고점 반납 매도 기준
+- `intraday_refresh_minutes`, `max_monitored_per_market`: 장중 후보 갱신 주기와 감시 종목 수
 
-긴급 중지는 프로젝트 루트에 `STOP_TRADING` 파일을 만들면 됩니다. 실전 자동주문은 전략의 `execution_mode`을 `live`, `.env`의 `KIS_ENABLE_REAL_TRADING`을 `true`로 바꾸고 실행 시 `--confirm-live`까지 지정해야 합니다.
+긴급 중지는 프로젝트 루트에 `STOP_TRADING` 파일을 만들면 됩니다. 시장별 실전 자동주문은 전략의 `live_markets`에 대상 시장을 넣고, `.env`의 `KIS_ENABLE_REAL_TRADING`을 `true`로 바꾼 뒤 실행 시 `--confirm-live`까지 지정해야 합니다.
 
 보유 후 익절·손절은 REST 폴링 대신 WebSocket 실시간 체결가의 매수 1호가를 사용합니다.
 

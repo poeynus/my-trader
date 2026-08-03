@@ -40,7 +40,7 @@ KIS_ENABLE_REAL_TRADING=false
 
 ```json
 {
-  "execution_mode": "dry_run",
+  "execution_mode": "live",
   "take_profit_percent": 2.5,
   "stop_loss_percent": 1.5,
   "auto_discover": true,
@@ -87,7 +87,7 @@ KIS_ENABLE_REAL_TRADING=false
 
 실제 주문은 다음 세 조건을 모두 만족해야 합니다.
 
-1. `strategy.json`의 `execution_mode`이 `live`
+1. `strategy.json`의 `live_markets`에 실전 시장이 포함됨
 2. `.env`의 `KIS_ENABLE_REAL_TRADING=true`
 3. 실행 명령에 `--confirm-live`
 
@@ -107,7 +107,9 @@ KIS_ENABLE_REAL_TRADING=false
 .venv/bin/python main.py auto autopilot --confirm-live
 ```
 
-국내는 09:00~15:20 KST, 미국은 09:35~15:50 ET에 기본 10초 간격으로 매매 판단을 반복합니다. 실제 API 응답과 종목 수에 따라 한 사이클은 더 길어질 수 있습니다. 장 종료 때 우량·유동성 필터를 통과한 최대 20개 후보 중 5일 이동평균이 20일 이동평균보다 높은 상승 추세 종목만 최대 3개 저장합니다. 조건을 충족하는 종목이 부족하면 숫자를 억지로 채우지 않습니다. 보유 중에는 현재가로 익절·손절을 판단하고, 매도가 체결되면 재진입 대기시간 후 남은 동시 투자 한도 안에서 다시 매수할 수 있습니다. 주문 전 국내 미수 없는 매수 가능 수량과 미국 통합증거금 반영 가능 수량을 확인합니다.
+국내는 09:00~15:20 KST, 미국은 09:35~15:50 ET에 기본 10초 간격으로 매매 판단을 반복합니다. 실제 API 응답과 종목 수에 따라 한 사이클은 더 길어질 수 있습니다. 장 종료 때 우량·유동성 필터를 통과한 최대 20개 후보 중 5일 이동평균이 20일 이동평균보다 높은 상승 추세 종목만 최대 5개 저장합니다. 조건을 충족하는 종목이 부족하면 숫자를 억지로 채우지 않습니다. 장중에는 15분마다 거래대금 순위를 다시 조회해 감시 대상을 최대 8개로 갱신하며, 기존 보유 종목은 청산까지 유지합니다. 보유 중에는 현재가로 익절·손절을 판단하고, 매도가 체결되면 재진입 대기시간 후 남은 동시 투자 한도 안에서 다시 매수할 수 있습니다. 주문 전 국내 미수 없는 매수 가능 수량과 미국 통합증거금 반영 가능 수량을 확인합니다.
+
+국내는 15:00, 미국은 15:35 ET부터 신규 진입을 중단합니다. 국내 15:15, 미국 15:45 ET부터 남은 포지션을 전량 청산하고 각각 15:29, 15:59까지 체결과 재시도를 반복합니다. 일시적인 잔고·시세·후보 갱신 API 오류는 거래 로그에 남기고 다음 사이클에서 자동 복구합니다. 전 거래일 포지션이 예외적으로 남아 있으면 다음 정규장 시작 직후 우선 청산합니다.
 
 `autopilot` 자체가 매수와 매도를 모두 수행하므로 별도 `auto watch` 프로세스를 동시에 실행하지 마세요. 동일 종목 중복 매도 방지를 위해 두 실행 방식을 함께 사용하지 않습니다.
 
@@ -118,15 +120,33 @@ KIS_ENABLE_REAL_TRADING=false
   "max_active_investment_krw": 200000,
   "max_active_investment_usd": 140,
   "reentry_cooldown_seconds": 60,
-  "max_round_trips_per_symbol": 3,
+  "max_round_trips_per_symbol": 5,
+  "max_daily_round_trips_per_market": 8,
   "max_daily_loss_krw": 10000,
   "max_daily_loss_usd": 7,
+  "time_stop_minutes": 15,
+  "time_stop_loss_percent": 0.3,
+  "trailing_stop_activation_percent": 1.5,
+  "trailing_stop_giveback_percent": 0.5,
+  "intraday_refresh_minutes": 15,
+  "max_monitored_per_market": 8,
   "fill_timeout_seconds": 60,
   "max_retries": 1
 }
 ```
 
-`max_active_investment_*`는 하루 누적 매수액이 아니라 동시에 보유할 수 있는 원가 합계입니다. 매도 체결 후에는 한도가 복구됩니다. 현재 설정은 같은 종목 매도 후 1분 대기, 종목별 하루 왕복 3회, 국내 일일 확정손실 1만 원·미국 7달러 도달 시 신규 진입 중단입니다. 손실 한도는 미실현 손익이 아니라 프로그램이 확인한 당일 매도 체결 손익을 기준으로 합니다.
+`max_active_investment_*`는 하루 누적 매수액이 아니라 동시에 보유할 수 있는 원가 합계입니다. 매도 체결 후에는 한도가 복구됩니다. 현재 설정은 같은 종목 매도 후 1분 대기, 종목별 하루 왕복 5회, 시장 전체 하루 왕복 8회, 국내 일일 확정손실 1만 원·미국 7달러 도달 시 신규 진입 중단입니다. 손실 한도는 미실현 손익이 아니라 프로그램이 확인한 당일 매도 체결 손익을 기준으로 합니다.
+
+현재 시장별 모드는 다음처럼 미국만 실전으로 분리할 수 있습니다.
+
+```json
+{
+  "execution_mode": "dry_run",
+  "live_markets": ["kr", "us"]
+}
+```
+
+`live_markets`가 있으면 포함된 시장만 실제 주문하고 나머지는 `dry_run`으로 동작합니다.
 
 `autopilot`은 파일 잠금을 사용하여 두 개가 동시에 실행되는 것을 차단합니다.
 
