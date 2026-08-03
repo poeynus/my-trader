@@ -15,6 +15,7 @@ from .execution import ExecutionManager
 from .scheduler import EndOfDayScheduler
 from .strategy import StrategyConfig
 from .universe import UniverseSelector
+from .trade_log import append_event
 
 
 MARKET_SCHEDULES = {
@@ -86,8 +87,7 @@ class Autopilot:
         event = {"time": now.isoformat(), "market": market, "action": "error",
                  "reason": f"{stage}: {exc}", "stage": stage}
         print(json.dumps({"event": "cycle_error", **event}, ensure_ascii=False), flush=True)
-        with Path("trades.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        append_event(event)
 
     def _cycle_due(self, market: str) -> bool:
         zone, start, _, _, end = MARKET_SCHEDULES[market]

@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .client import KISClient
 from .strategy import StrategyConfig, SymbolConfig
+from .trade_log import DEFAULT_LOG_DIR, read_event_lines
 
 
 def _number(value: Any) -> float:
@@ -25,8 +26,8 @@ def _fmt(value: float, currency: str) -> str:
 class DailyReporter:
     def __init__(self, client: KISClient, config: Optional[StrategyConfig] = None,
                  reports_dir: Path = Path("reports"), trades_path: Path = Path("trades.jsonl"),
-                 state_path: Path = Path(".trader-state.json")):
-        self.client, self.config, self.reports_dir, self.trades_path, self.state_path = client, config, reports_dir, trades_path, state_path
+                 state_path: Path = Path(".trader-state.json"), trades_dir: Path = DEFAULT_LOG_DIR):
+        self.client, self.config, self.reports_dir, self.trades_path, self.state_path, self.trades_dir = client, config, reports_dir, trades_path, state_path, trades_dir
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
     def generate(self, market: str, selected: List[SymbolConfig]) -> Path:
@@ -124,12 +125,8 @@ class DailyReporter:
         self._snapshot_path(market).write_text(json.dumps(snapshots, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _events(self, market: str, day: str, timezone: ZoneInfo) -> List[Dict[str, Any]]:
-        try:
-            lines = self.trades_path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            return []
         events = []
-        for line in lines:
+        for line in read_event_lines(market, day, legacy_path=self.trades_path, log_dir=self.trades_dir):
             try:
                 event = json.loads(line)
                 event_day = datetime.fromisoformat(event["time"]).astimezone(timezone).date().isoformat()

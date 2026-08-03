@@ -207,7 +207,9 @@ KIS_ENABLE_REAL_TRADING=false
 | `.trader-state.json` | 가상 포지션과 중복 주문 상태 |
 | `.execution-state.json` | 시장별 일일 신규투자 사용액 |
 | `.autopilot-state.json` | 시장별 마지막 진입 실행일 |
-| `trades.jsonl` | 자동매매 이벤트 원본 |
+| `logs/trades/YYYY-MM-DD-kr.jsonl` | 국내 자동매매 이벤트 원본 |
+| `logs/trades/YYYY-MM-DD-us.jsonl` | 미국 자동매매 이벤트 원본 |
+| `trades.jsonl` | 변경 전 과거 이벤트 원본(보고서가 계속 읽음) |
 | `reports/YYYY-MM-DD-*.md` | 일간 Markdown 보고서 |
 | `reports/snapshots-*.json` | 전일 비교용 계좌 스냅샷 |
 | `.kis-token.json` | API 접근 토큰 캐시 |

@@ -157,6 +157,7 @@ activemq-data/
 .autopilot-state.json
 .autopilot.lock
 trades.jsonl
+logs/
 reports/
 .envrc
 .venv

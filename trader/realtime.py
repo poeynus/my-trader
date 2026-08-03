@@ -11,6 +11,7 @@ from .auto import AutoTrader
 from .client import KISClient, SafetyError, US_QUOTE_EXCHANGES
 from .strategy import StrategyConfig, SymbolConfig
 from .execution import ExecutionManager
+from .trade_log import append_event
 
 
 LOG_TIMEZONE = ZoneInfo("Asia/Seoul")
@@ -26,7 +27,7 @@ US_COLUMNS = ["symbol", "decimal", "local_date", "kr_date", "local_time", "kr_tr
 
 
 class RealtimeExitMonitor:
-    def __init__(self, client: KISClient, config: StrategyConfig, log_path: Path = Path("trades.jsonl"), execution: Optional[ExecutionManager] = None):
+    def __init__(self, client: KISClient, config: StrategyConfig, log_path: Optional[Path] = None, execution: Optional[ExecutionManager] = None):
         self.client, self.config, self.log_path = client, config, log_path
         self.submitted: set[str] = set()
         self.execution = execution
@@ -126,5 +127,4 @@ class RealtimeExitMonitor:
         except Exception as exc:
             event = {"time": datetime.now(LOG_TIMEZONE).isoformat(), "market": market, "symbol": symbol,
                      "action": "order_error", "reason": str(exc), "profit_percent": profit}
-        with self.log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        append_event(event, explicit_path=self.log_path)

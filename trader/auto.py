@@ -13,6 +13,7 @@ from .client import KISClient, SafetyError
 from .strategy import StrategyConfig, SymbolConfig, moving_average_signal
 from .screener import HardScreener
 from .execution import ExecutionManager
+from .trade_log import append_event
 
 
 STATE_LOCK = threading.RLock()
@@ -22,7 +23,7 @@ SCREEN_CACHE: Dict[str, tuple[float, Any]] = {}
 
 
 class AutoTrader:
-    def __init__(self, client: KISClient, config: StrategyConfig, state_path: Path = Path(".trader-state.json"), log_path: Path = Path("trades.jsonl"), execution: Optional[ExecutionManager] = None):
+    def __init__(self, client: KISClient, config: StrategyConfig, state_path: Path = Path(".trader-state.json"), log_path: Optional[Path] = None, execution: Optional[ExecutionManager] = None):
         self.client, self.config = client, config
         self.state_path, self.log_path = state_path, log_path
         self.state = self._load_state()
@@ -61,8 +62,7 @@ class AutoTrader:
         self.state_path.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _log(self, event: Dict[str, Any]) -> None:
-        with self.log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"time": datetime.now(LOG_TIMEZONE).isoformat(), **event}, ensure_ascii=False) + "\n")
+        append_event({"time": datetime.now(LOG_TIMEZONE).isoformat(), **event}, explicit_path=self.log_path)
 
     def run_once(self, confirm_live: bool = False, allow_new_entries: bool = True,
                  force_exit: bool = False) -> List[Dict[str, Any]]:

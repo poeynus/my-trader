@@ -78,7 +78,7 @@ python3 main.py auto cycle    # 종목 재선정 후 진입 신호 판단
 python3 main.py auto loop --interval 300
 ```
 
-기본 `dry_run`은 실제 주문 없이 `.trader-state.json`에 가상 보유 상태를 저장하고 `trades.jsonl`에 판단을 기록합니다.
+기본 `dry_run`은 실제 주문 없이 `.trader-state.json`에 가상 보유 상태를 저장합니다. 거래 판단 로그는 `logs/trades/YYYY-MM-DD-kr.jsonl`과 `YYYY-MM-DD-us.jsonl`에 시장 거래일별로 기록됩니다. 기존 `trades.jsonl`은 과거 로그로 유지됩니다.
 API 요청은 호출 제한을 피하기 위해 기본 1초 간격으로 실행되며 `.env`의 `KIS_MIN_REQUEST_INTERVAL`로 조정할 수 있습니다.
 
 - `fast_period`, `slow_period`: 진입·청산 이동평균
