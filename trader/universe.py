@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Set
 
 from .client import KISClient
 from .screener import HardScreener
-from .strategy import StrategyConfig, SymbolConfig
+from .strategy import StrategyConfig, SymbolConfig, moving_average_signal
 
 
 class UniverseSelector:
@@ -25,12 +25,24 @@ class UniverseSelector:
                 continue
             try:
                 result = screener.screen(item)
+                trend_up = self._trend_up(item)
             except Exception:
                 continue
-            if result.approved:
+            if result.approved and trend_up:
                 selected.append(item)
                 counts[item.market] += 1
         return selected
+
+    def _trend_up(self, item: SymbolConfig) -> bool:
+        days = self.config.slow_period + 2
+        if item.market == "kr":
+            rows = self.client.domestic_daily_prices(item.symbol, days)
+            closes = [float(x["stck_clpr"]) for x in rows if x.get("stck_clpr")]
+        else:
+            rows = self.client.us_daily_prices(item.symbol, item.exchange, days)
+            closes = [float(x["clos"]) for x in rows if x.get("clos")]
+        signal = moving_average_signal(closes, self.config.fast_period, self.config.slow_period)
+        return float(signal["fast"]) > float(signal["slow"])
 
     def _domestic_candidates(self) -> List[SymbolConfig]:
         rows = self.client.domestic_turnover_rank()

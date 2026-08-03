@@ -11,7 +11,7 @@
   "min_avg_turnover_usd": 20000000,
   "max_daily_change_percent": 20,
   "auto_discover": true,
-  "candidates_per_market": 10,
+  "candidates_per_market": 20,
   "selected_per_market": 3,
   "default_position_krw": 200000,
   "default_position_usd": 140,
