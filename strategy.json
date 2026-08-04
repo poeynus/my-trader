@@ -22,7 +22,7 @@
   "max_active_investment_usd": 140,
   "reentry_cooldown_seconds": 60,
   "max_round_trips_per_symbol": 5,
-  "max_daily_round_trips_per_market": 8,
+  "max_daily_round_trips_per_market": 15,
   "max_daily_loss_krw": 10000,
   "max_daily_loss_usd": 7,
   "time_stop_minutes": 15,

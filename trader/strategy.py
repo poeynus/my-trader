@@ -83,7 +83,7 @@ class StrategyConfig:
                 max_active_investment_usd=float(data.get("max_active_investment_usd", data.get("max_daily_investment_usd", 1500))),
                 reentry_cooldown_seconds=int(data.get("reentry_cooldown_seconds", 300)),
                 max_round_trips_per_symbol=int(data.get("max_round_trips_per_symbol", 3)),
-                max_daily_round_trips_per_market=int(data.get("max_daily_round_trips_per_market", 8)),
+                max_daily_round_trips_per_market=int(data.get("max_daily_round_trips_per_market", 15)),
                 max_daily_loss_krw=float(data.get("max_daily_loss_krw", 10000)),
                 max_daily_loss_usd=float(data.get("max_daily_loss_usd", 10)),
                 time_stop_minutes=int(data.get("time_stop_minutes", 15)),
