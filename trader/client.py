@@ -25,6 +25,7 @@ class KISClient:
         self.settings = settings
         self.transport = transport or HTTPTransport()
         self._access_token: Optional[str] = None
+        self._access_token_expires_at = 0.0
         self._last_request_at = 0.0
         self._request_lock = threading.Lock()
 
@@ -37,6 +38,7 @@ class KISClient:
                 and data.get("app_key") == self.settings.app_key
                 and float(data.get("expires_at", 0)) > time.time() + 60
             ):
+                self._access_token_expires_at = float(data["expires_at"])
                 return str(data["access_token"])
         except (FileNotFoundError, ValueError, KeyError, OSError):
             return None
@@ -54,8 +56,9 @@ class KISClient:
             pass
 
     def authenticate(self) -> str:
-        if self._access_token:
+        if self._access_token and self._access_token_expires_at > time.time() + 60:
             return self._access_token
+        self._access_token = None
         cached = self._load_cached_token()
         if cached:
             self._access_token = cached
@@ -71,8 +74,18 @@ class KISClient:
         if not token:
             raise APIError("접근 토큰 응답에 access_token이 없습니다.")
         self._access_token = str(token)
-        self._save_token(self._access_token, int(response.data.get("expires_in", 86400)))
+        expires_in = int(response.data.get("expires_in", 86400))
+        self._access_token_expires_at = time.time() + expires_in
+        self._save_token(self._access_token, expires_in)
         return self._access_token
+
+    def _invalidate_token(self) -> None:
+        self._access_token = None
+        self._access_token_expires_at = 0.0
+        try:
+            self.settings.token_cache_path.unlink()
+        except FileNotFoundError:
+            pass
 
     def websocket_approval_key(self) -> str:
         response = self.transport.request(
@@ -97,7 +110,9 @@ class KISClient:
         }
 
     def _call(self, method: str, path: str, tr_id: str, *, params: Optional[Mapping[str, Any]] = None, body: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
-        attempts = 3 if method.upper() == "GET" else 1
+        # 쓰기 요청은 일반 네트워크 오류에 재시도하지 않지만, 서버가 주문을 거부한
+        # 명시적인 토큰 만료 응답은 새 토큰 발급 후 한 번만 안전하게 재전송한다.
+        attempts = 3 if method.upper() == "GET" else 2
         for attempt in range(attempts):
             try:
                 with self._request_lock:
@@ -115,6 +130,10 @@ class KISClient:
                 return data
             except APIError as exc:
                 message = str(exc).lower()
+                token_expired = "만료된 token" in message or "token expired" in message or "기간이 만료된" in message
+                if token_expired and attempt + 1 < attempts:
+                    self._invalidate_token()
+                    continue
                 retriable = ("초당 거래건수" in message or "timed out" in message or "연결 실패" in message
                              or exc.status == 429 or exc.status >= 500)
                 if attempt + 1 >= attempts or not retriable:
