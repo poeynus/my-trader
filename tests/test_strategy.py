@@ -14,7 +14,7 @@ class StrategyTests(unittest.TestCase):
             config = StrategyConfig.load(path)
         self.assertEqual(config.symbols, [])
 
-    def test_live_markets_override_default_mode(self):
+    def test_live_markets_enable_both_markets(self):
         config = StrategyConfig.load(Path("strategy.json"))
         self.assertEqual(config.mode_for("kr"), "live")
         self.assertEqual(config.mode_for("us"), "live")

@@ -31,6 +31,11 @@ class UniverseTests(unittest.TestCase):
         symbols = UniverseSelector(MomentumClient(), config).momentum_candidates("kr")
         self.assertEqual([x.symbol for x in symbols], ["000003", "000002"])
 
+    def test_intraday_momentum_replaces_excluded_symbol(self):
+        config = StrategyConfig.load(Path("strategy.json"))
+        symbols = UniverseSelector(MomentumClient(), config).momentum_candidates("kr", {"000003"})
+        self.assertEqual([x.symbol for x in symbols], ["000002"])
+
     def test_trend_filter_accepts_fast_ma_above_slow_ma(self):
         config = StrategyConfig.load(Path("strategy.json"))
         newest_first = list(reversed([100] * 16 + [110, 112, 114, 116, 118]))

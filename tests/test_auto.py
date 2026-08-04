@@ -60,6 +60,32 @@ class AutoTraderTests(unittest.TestCase):
             result = self._trader(directory, 100.1, opened_at=opened).run_once()[0]
         self.assertEqual((result["action"], result["reason"]), ("sell", "overnight_exit"))
 
+    def test_intraday_momentum_accepts_breakout_above_daily_support(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trader = self._trader(directory, 100)
+            key = "kr:005930"
+            now = datetime.now(timezone.utc)
+            trader.state["price_samples"] = {key: [
+                {"time": (now - timedelta(seconds=120)).isoformat(), "price": 100, "volume": 1000},
+                {"time": (now - timedelta(seconds=60)).isoformat(), "price": 100.1, "volume": 1100},
+            ]}
+            signal = trader._intraday_entry_signal(key, 101.0, 1200, 1.0, 99.0)
+        self.assertTrue(signal["ready"])
+        self.assertEqual(signal["reason"], "intraday_momentum")
+
+    def test_intraday_momentum_keeps_daily_average_as_support_filter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trader = self._trader(directory, 100)
+            key = "kr:005930"
+            now = datetime.now(timezone.utc)
+            trader.state["price_samples"] = {key: [
+                {"time": (now - timedelta(seconds=120)).isoformat(), "price": 100, "volume": 1000},
+                {"time": (now - timedelta(seconds=60)).isoformat(), "price": 100.1, "volume": 1100},
+            ]}
+            signal = trader._intraday_entry_signal(key, 100.4, 1200, 1.0, 101.0)
+        self.assertFalse(signal["ready"])
+        self.assertEqual(signal["reason"], "intraday_below_daily_support")
+
 
 if __name__ == "__main__":
     unittest.main()

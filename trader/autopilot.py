@@ -13,7 +13,7 @@ from .auto import AutoTrader
 from .client import KISClient, SafetyError
 from .execution import ExecutionManager
 from .scheduler import EndOfDayScheduler
-from .strategy import StrategyConfig
+from .strategy import StrategyConfig, SymbolConfig
 from .universe import UniverseSelector
 from .trade_log import append_event
 
@@ -113,21 +113,39 @@ class Autopilot:
             current = UniverseSelector.load(config=self.config)
         except (FileNotFoundError, ValueError, json.JSONDecodeError):
             current = []
-        fresh = selector.momentum_candidates(market)
-        held: set[str] = set()
+        held_items: Dict[str, SymbolConfig] = {}
         if self.config.mode_for(market) == "dry_run":
             try:
                 state = json.loads(Path(".trader-state.json").read_text(encoding="utf-8"))
-                held = {k.split(":", 1)[1] for k in state.get("virtual_positions", {}) if k.startswith(market + ":")}
+                for key in state.get("virtual_positions", {}):
+                    if not key.startswith(market + ":"):
+                        continue
+                    symbol = key.split(":", 1)[1].upper()
+                    existing = next((x for x in current if x.market == market and x.symbol == symbol), None)
+                    held_items[symbol] = existing or SymbolConfig(
+                        market, symbol, "NASDAQ",
+                        self.config.default_position_krw if market == "kr" else self.config.default_position_usd)
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
         else:
             rows = self.client.domestic_balance()["positions"] if market == "kr" else self.client.us_balance()["positions"]
             field = "pdno" if market == "kr" else "ovrs_pdno"
             qty_field = "hldg_qty" if market == "kr" else "ovrs_cblc_qty"
-            held = {str(x.get(field, "")).upper() for x in rows if float(x.get(qty_field) or 0) > 0}
-        retained = [x for x in current if x.market == market and x.symbol in held]
-        unique = {x.symbol: x for x in retained}
+            exchange_map = {"NASD": "NASDAQ", "NYSE": "NYSE", "AMEX": "AMEX"}
+            for row in rows:
+                if float(row.get(qty_field) or 0) <= 0:
+                    continue
+                symbol = str(row.get(field, "")).upper()
+                exchange = ("NASDAQ" if market == "kr"
+                            else exchange_map.get(str(row.get("ovrs_excg_cd") or "").upper(), "NASDAQ"))
+                held_items[symbol] = SymbolConfig(
+                    market, symbol, exchange,
+                    self.config.default_position_krw if market == "kr" else self.config.default_position_usd)
+        held = set(held_items)
+        exhausted = self._exhausted_symbols(market) - held
+        fresh = selector.momentum_candidates(market, excluded_symbols=exhausted)
+        # 장 종료 재선정에서 빠진 종목이라도 실제 잔고에 있으면 반드시 감시·청산한다.
+        unique = dict(held_items)
         for item in fresh:
             if len(unique) >= self.config.max_monitored_per_market:
                 break
@@ -137,7 +155,19 @@ class Autopilot:
         now = datetime.now(MARKET_SCHEDULES[market][0])
         self.state.setdefault("last_refresh", {})[market] = now.isoformat()
         self.state_path.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(json.dumps({"event": "universe_refreshed", "market": market, "symbols": list(unique)}, ensure_ascii=False), flush=True)
+        print(json.dumps({"event": "universe_refreshed", "market": market, "symbols": list(unique),
+                          "excluded_round_trip_limit": sorted(exhausted)}, ensure_ascii=False), flush=True)
+
+    def _exhausted_symbols(self, market: str) -> set[str]:
+        """오늘 종목별 왕복 한도를 소진해 신규 후보에서 제외할 종목을 반환한다."""
+        try:
+            trader_state = json.loads(Path(".trader-state.json").read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return set()
+        market_day = datetime.now(MARKET_SCHEDULES[market][0]).date().isoformat()
+        intraday = trader_state.get("intraday", {}).get(f"{market}:{market_day}", {})
+        return {str(symbol).upper() for symbol, count in intraday.get("round_trips", {}).items()
+                if int(count) >= self.config.max_round_trips_per_symbol}
 
     async def _run_entry(self, market: str, allow_new_entries: bool, force_exit: bool) -> None:
         try:

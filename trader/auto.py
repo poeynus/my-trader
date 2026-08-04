@@ -40,6 +40,7 @@ class AutoTrader:
         state.setdefault("last_actions", {})
         state.setdefault("intraday", {})
         state.setdefault("position_meta", {})
+        state.setdefault("price_samples", {})
         return state
 
     def _intraday(self, market: str) -> Dict[str, Any]:
@@ -135,6 +136,44 @@ class AutoTrader:
         SCREEN_CACHE[key] = (time.monotonic(), result)
         return result
 
+    def _intraday_entry_signal(self, key: str, current: float, volume: float,
+                               daily_change_percent: float, slow_ma: float) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        cutoff = now.timestamp() - self.config.intraday_entry_lookback_seconds
+        samples = self.state["price_samples"].setdefault(key, [])
+        samples.append({"time": now.isoformat(), "price": current, "volume": volume})
+        samples[:] = [x for x in samples if datetime.fromisoformat(x["time"]).timestamp() >= cutoff][-60:]
+        result = {"ready": False, "momentum_percent": 0.0, "sample_count": len(samples),
+                  "volume_rising": False, "breakout": False}
+        if len(samples) < self.config.intraday_entry_min_samples:
+            result["reason"] = "intraday_warmup"
+            return result
+        first = samples[0]
+        elapsed = (now - datetime.fromisoformat(first["time"])).total_seconds()
+        if elapsed < 60:
+            result["reason"] = "intraday_warmup"
+            return result
+        start_price = float(first["price"])
+        momentum = (current / start_price - 1) * 100 if start_price else 0.0
+        previous_high = max(float(x["price"]) for x in samples[:-1])
+        volume_rising = volume <= 0 or float(first.get("volume") or 0) <= 0 or volume > float(first["volume"])
+        breakout = current >= previous_high
+        result.update({"momentum_percent": momentum, "volume_rising": volume_rising,
+                       "breakout": breakout, "elapsed_seconds": elapsed})
+        if daily_change_percent <= 0:
+            result["reason"] = "intraday_daily_change_not_positive"
+        elif current < slow_ma:
+            result["reason"] = "intraday_below_daily_support"
+        elif momentum < self.config.intraday_entry_momentum_percent:
+            result["reason"] = "intraday_no_momentum"
+        elif not breakout:
+            result["reason"] = "intraday_no_breakout"
+        elif not volume_rising:
+            result["reason"] = "intraday_volume_not_rising"
+        else:
+            result.update({"ready": True, "reason": "intraday_momentum"})
+        return result
+
     def _evaluate(self, item: SymbolConfig, positions: Dict[str, Any], confirm_live: bool,
                   allow_new_entries: bool, force_exit: bool) -> Dict[str, Any]:
         key = item.market + ":" + item.symbol
@@ -143,12 +182,20 @@ class AutoTrader:
         if item.market == "kr":
             quote = self.client.domestic_quote(item.symbol)
             current = float(quote["stck_prpr"])
+            volume = float(quote.get("acml_vol") or 0)
+            daily_change_percent = float(quote.get("prdy_ctrt") or 0)
             domestic_market_name = str(quote.get("rprs_mrkt_kor_name") or "KOSPI")
         else:
-            current = float(self.client.us_quote(item.symbol, item.exchange)["last"])
+            quote = self.client.us_quote(item.symbol, item.exchange)
+            current = float(quote["last"])
+            volume = float(quote.get("tvol") or quote.get("volume") or 0)
+            daily_change_percent = float(quote.get("rate") or quote.get("prdy_ctrt") or 0)
         # 마감 청산은 일봉 조회 실패와 무관하게 반드시 주문까지 진행한다.
         ma = {"signal": "hold", "fast": 0.0, "slow": 0.0} if force_exit and position else self._ma(item)
         action, reason, profit_percent = "hold", str(ma["signal"]), None
+        intraday_signal = self._intraday_entry_signal(
+            key, current, volume, daily_change_percent, float(ma["slow"])
+        ) if not position and allow_new_entries else {"ready": False, "momentum_percent": 0.0, "sample_count": 0}
         if position:
             average = float(position["average_price"])
             profit_percent = (current / average - 1) * 100 if average else 0
@@ -173,11 +220,17 @@ class AutoTrader:
                 action, reason = "sell", "time_stop"
             elif ma["signal"] == "cross_down":
                 action, reason = "sell", "cross_down"
-        elif allow_new_entries and float(ma["fast"]) > float(ma["slow"]):
-            # 장기 추세가 상승인 동안에는 청산 후 대기시간을 거쳐 재진입할 수 있다.
-            action, reason = "buy", "trend_up"
+        elif allow_new_entries:
+            # 일봉은 현재가가 장기 평균 위인지 확인하는 보조 필터로만 쓰고,
+            # 실제 진입은 짧은 구간의 상승과 직전 고점 돌파로 결정한다.
+            if intraday_signal["ready"]:
+                action, reason = "buy", "intraday_momentum"
+            else:
+                reason = str(intraday_signal.get("reason", "hold"))
         base = {"market": item.market, "symbol": item.symbol, "price": current, "profit_percent": profit_percent,
                 "fast_ma": round(float(ma["fast"]), 4), "slow_ma": round(float(ma["slow"]), 4),
+                "intraday_momentum_percent": round(float(intraday_signal.get("momentum_percent", 0)), 4),
+                "intraday_sample_count": int(intraday_signal.get("sample_count", 0)),
                 "action": action, "reason": reason, "mode": self.config.mode_for(item.market)}
         if action == "hold":
             return base

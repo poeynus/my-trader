@@ -37,6 +37,7 @@ class DailyReporter:
         snapshot = self._snapshot(market, day, selected)
         previous = self._previous_snapshot(market, day)
         events = self._events(market, day, timezone)
+        snapshot["metrics"].update(self._estimated_cost_metrics(market, events, snapshot["metrics"]["realized_pnl"]))
         path = self.reports_dir / f"{day}-{market}.md"
         path.write_text(self._markdown(snapshot, previous, events, now), encoding="utf-8")
         self._save_snapshot(market, snapshot)
@@ -136,6 +137,37 @@ class DailyReporter:
                 continue
         return events
 
+    def _estimated_cost_metrics(self, market: str, events: List[Dict[str, Any]], gross_pnl: float) -> Dict[str, float]:
+        buy_notional = sell_notional = 0.0
+        for event in events:
+            if event.get("action") not in {"buy", "sell"}:
+                continue
+            order = event.get("order") if isinstance(event.get("order"), dict) else {}
+            quantity = _number(order.get("filled_quantity"))
+            price = _number(order.get("average_price"))
+            if order.get("simulated"):
+                quantity = _number(event.get("quantity"))
+                price = _number(event.get("limit_price"))
+            if quantity <= 0 or price <= 0:
+                continue
+            if event["action"] == "buy":
+                buy_notional += quantity * price
+            else:
+                sell_notional += quantity * price
+        if not self.config:
+            commission_percent = sell_cost_percent = 0.0
+        elif market == "kr":
+            commission_percent = self.config.estimated_commission_percent_kr
+            sell_cost_percent = self.config.estimated_sell_cost_percent_kr
+        else:
+            commission_percent = self.config.estimated_commission_percent_us
+            sell_cost_percent = self.config.estimated_sell_cost_percent_us
+        estimated_cost = ((buy_notional + sell_notional) * commission_percent
+                          + sell_notional * sell_cost_percent) / 100
+        return {"buy_notional": buy_notional, "sell_notional": sell_notional,
+                "turnover": buy_notional + sell_notional, "estimated_trading_cost": estimated_cost,
+                "estimated_net_pnl": gross_pnl - estimated_cost}
+
     def _markdown(self, current: Dict[str, Any], previous: Optional[Dict[str, Any]], events: List[Dict[str, Any]], now: datetime) -> str:
         market_name = "국내" if current["market"] == "kr" else "미국"
         currency, metrics = current["currency"], current["metrics"]
@@ -144,8 +176,11 @@ class DailyReporter:
                  f"| 보유 종목 | {metrics['position_count']}개 |", f"| 매입금액 | {_fmt(metrics['cost'], currency)} |",
                  f"| 평가금액 | {_fmt(metrics['value'], currency)} |", f"| 미실현 손익 | {_fmt(metrics['unrealized_pnl'], currency)} |",
                  f"| 미실현 수익률 | {metrics['unrealized_return_percent']:.2f}% |",
-                 f"| 확정손익 | {_fmt(metrics.get('realized_pnl', 0), currency)} |",
-                 f"| 합산손익 | {_fmt(metrics.get('total_pnl', metrics['unrealized_pnl']), currency)} |"]
+                 f"| 비용 전 확정손익 | {_fmt(metrics.get('realized_pnl', 0), currency)} |",
+                 f"| 총 체결금액 | {_fmt(metrics.get('turnover', 0), currency)} |",
+                 f"| 예상 거래비용 | {_fmt(metrics.get('estimated_trading_cost', 0), currency)} |",
+                 f"| 예상 비용 후 확정손익 | {_fmt(metrics.get('estimated_net_pnl', 0), currency)} |",
+                 f"| 예상 비용 후 합산손익 | {_fmt(metrics.get('estimated_net_pnl', 0) + metrics['unrealized_pnl'], currency)} |"]
         lines += ["", "## 전일 대비", ""]
         if previous:
             pm = previous["metrics"]
@@ -173,5 +208,5 @@ class DailyReporter:
             lines.append(f"| {shown_time} | {x.get('symbol', '')} | {x.get('action', '')} | {x.get('reason', '')} | {x.get('price', '')} | {x.get('profit_percent', '')} |")
         if not events:
             lines.append("| 이벤트 없음 | - | - | - | - | - |")
-        lines += ["", "> 전일 대비는 장 종료 스냅샷 간 변화입니다. 입출금·환전·수수료·세금이 있으면 순수 매매손익과 다를 수 있습니다.", ""]
+        lines += ["", "> 거래비용은 strategy.json의 시장별 예상 수수료·매도비용 비율로 계산한 추정치입니다. 실제 계좌의 이벤트·환전·최소수수료에 따라 앱 손익과 다를 수 있습니다.", ""]
         return "\n".join(lines)

@@ -33,8 +33,9 @@ class UniverseSelector:
                 counts[item.market] += 1
         return selected
 
-    def momentum_candidates(self, market: str) -> List[SymbolConfig]:
+    def momentum_candidates(self, market: str, excluded_symbols: Optional[Set[str]] = None) -> List[SymbolConfig]:
         """장중 순위에서 빠르게 감시 후보를 갱신한다. 실제 진입 전 하드필터와 추세는 다시 확인한다."""
+        excluded = {symbol.upper() for symbol in (excluded_symbols or set())}
         ranked: List[tuple[tuple[float, float, float], SymbolConfig]] = []
         if market == "kr":
             for row in self.client.domestic_turnover_rank():
@@ -55,7 +56,7 @@ class UniverseSelector:
                             and caps[symbol] >= self.config.min_market_cap_usd):
                         ranked.append(((rate, turnover, 0), SymbolConfig("us", symbol, exchange, self.config.default_position_usd)))
         ranked.sort(key=lambda x: x[0], reverse=True)
-        return [item for _, item in ranked[:self.config.max_monitored_per_market]]
+        return [item for _, item in ranked if item.symbol.upper() not in excluded][:self.config.max_monitored_per_market]
 
     def _trend_up(self, item: SymbolConfig) -> bool:
         days = self.config.slow_period + 2

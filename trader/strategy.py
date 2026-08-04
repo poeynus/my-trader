@@ -52,6 +52,13 @@ class StrategyConfig:
     trailing_stop_giveback_percent: float
     intraday_refresh_minutes: int
     max_monitored_per_market: int
+    intraday_entry_lookback_seconds: int
+    intraday_entry_min_samples: int
+    intraday_entry_momentum_percent: float
+    estimated_commission_percent_kr: float
+    estimated_sell_cost_percent_kr: float
+    estimated_commission_percent_us: float
+    estimated_sell_cost_percent_us: float
     fill_timeout_seconds: int
     max_retries: int
     symbols: List[SymbolConfig]
@@ -92,6 +99,13 @@ class StrategyConfig:
                 trailing_stop_giveback_percent=float(data.get("trailing_stop_giveback_percent", 0.5)),
                 intraday_refresh_minutes=int(data.get("intraday_refresh_minutes", 15)),
                 max_monitored_per_market=int(data.get("max_monitored_per_market", 8)),
+                intraday_entry_lookback_seconds=int(data.get("intraday_entry_lookback_seconds", 180)),
+                intraday_entry_min_samples=int(data.get("intraday_entry_min_samples", 3)),
+                intraday_entry_momentum_percent=float(data.get("intraday_entry_momentum_percent", 0.3)),
+                estimated_commission_percent_kr=float(data.get("estimated_commission_percent_kr", 0.0140527)),
+                estimated_sell_cost_percent_kr=float(data.get("estimated_sell_cost_percent_kr", 0.15)),
+                estimated_commission_percent_us=float(data.get("estimated_commission_percent_us", 0.25)),
+                estimated_sell_cost_percent_us=float(data.get("estimated_sell_cost_percent_us", 0.003)),
                 fill_timeout_seconds=int(data.get("fill_timeout_seconds", 60)),
                 max_retries=int(data.get("max_retries", 1)),
                 symbols=[SymbolConfig(str(x["market"]).lower(), str(x["symbol"]).upper(),
@@ -134,6 +148,14 @@ class StrategyConfig:
             raise StrategyError("트레일링 스톱 설정을 확인하세요.")
         if not (5 <= self.intraday_refresh_minutes <= 120 and 1 <= self.max_monitored_per_market <= 15):
             raise StrategyError("장중 후보 갱신 설정을 확인하세요.")
+        if not (60 <= self.intraday_entry_lookback_seconds <= 900
+                and 2 <= self.intraday_entry_min_samples <= 20
+                and 0.05 <= self.intraday_entry_momentum_percent <= 5):
+            raise StrategyError("장중 진입 신호 설정을 확인하세요.")
+        if any(x < 0 or x > 5 for x in (
+                self.estimated_commission_percent_kr, self.estimated_sell_cost_percent_kr,
+                self.estimated_commission_percent_us, self.estimated_sell_cost_percent_us)):
+            raise StrategyError("예상 거래비용 비율은 0~5%여야 합니다.")
         if not (10 <= self.fill_timeout_seconds <= 600 and 0 <= self.max_retries <= 3):
             raise StrategyError("체결 제한시간은 10~600초, 재주문은 0~3회여야 합니다.")
 

@@ -96,6 +96,8 @@ API 요청은 호출 제한을 피하기 위해 기본 1초 간격으로 실행�
 - `time_stop_minutes`, `time_stop_loss_percent`: 오래 손실인 포지션의 시간 손절
 - `trailing_stop_activation_percent`, `trailing_stop_giveback_percent`: 수익 활성화·고점 반납 매도 기준
 - `intraday_refresh_minutes`, `max_monitored_per_market`: 장중 후보 갱신 주기와 감시 종목 수
+- `intraday_entry_lookback_seconds`, `intraday_entry_min_samples`, `intraday_entry_momentum_percent`: 장중 가격 표본 구간·최소 개수·매수 모멘텀 기준
+- `estimated_commission_percent_*`, `estimated_sell_cost_percent_*`: 일간 보고서의 예상 비용 후 순손익 계산 비율
 
 긴급 중지는 프로젝트 루트에 `STOP_TRADING` 파일을 만들면 됩니다. 시장별 실전 자동주문은 전략의 `live_markets`에 대상 시장을 넣고, `.env`의 `KIS_ENABLE_REAL_TRADING`을 `true`로 바꾼 뒤 실행 시 `--confirm-live`까지 지정해야 합니다.
 
