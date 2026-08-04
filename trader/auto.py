@@ -14,6 +14,7 @@ from .strategy import StrategyConfig, SymbolConfig, moving_average_signal
 from .screener import HardScreener
 from .execution import ExecutionManager
 from .trade_log import append_event
+from .pricing import round_domestic_order_price
 
 
 STATE_LOCK = threading.RLock()
@@ -138,8 +139,11 @@ class AutoTrader:
                   allow_new_entries: bool, force_exit: bool) -> Dict[str, Any]:
         key = item.market + ":" + item.symbol
         position = positions.get(key)
+        domestic_market_name = "KOSPI"
         if item.market == "kr":
-            current = float(self.client.domestic_quote(item.symbol)["stck_prpr"])
+            quote = self.client.domestic_quote(item.symbol)
+            current = float(quote["stck_prpr"])
+            domestic_market_name = str(quote.get("rprs_mrkt_kor_name") or "KOSPI")
         else:
             current = float(self.client.us_quote(item.symbol, item.exchange)["last"])
         # 마감 청산은 일봉 조회 실패와 무관하게 반드시 주문까지 진행한다.
@@ -196,7 +200,8 @@ class AutoTrader:
                 return {**base, "action": "hold", "reason": "screen_rejected:" + ",".join(screen.reasons)}
         buffer = self.config.limit_buffer_percent / 100
         estimated_limit_price = current * (1 + buffer if action == "buy" else 1 - buffer)
-        estimated_limit_price = round(estimated_limit_price) if item.market == "kr" else round(estimated_limit_price, 2)
+        estimated_limit_price = (round_domestic_order_price(estimated_limit_price, action, domestic_market_name)
+                                 if item.market == "kr" else round(estimated_limit_price, 2))
         if action == "buy":
             active_limit = self.config.max_active_investment_krw if item.market == "kr" else self.config.max_active_investment_usd
             active_exposure = sum(float(x["quantity"]) * float(x["average_price"])

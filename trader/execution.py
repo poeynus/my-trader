@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .client import KISClient, SafetyError
 from .strategy import StrategyConfig, SymbolConfig
+from .pricing import round_domestic_order_price
 
 
 def _num(value: Any) -> float:
@@ -84,7 +85,8 @@ class ExecutionManager:
                 market_price = _num(quote.get("stck_prpr") if item.market == "kr" else quote.get("last"))
                 buffer = self.config.limit_buffer_percent / 100
                 current_price = market_price * (1 + buffer if side == "buy" else 1 - buffer)
-                current_price = round(current_price) if item.market == "kr" else round(current_price, 2)
+                current_price = (round_domestic_order_price(current_price, side, str(quote.get("rprs_mrkt_kor_name") or "KOSPI"))
+                                 if item.market == "kr" else round(current_price, 2))
         avg = sum(x["filled"] * x["average_price"] for x in attempts) / filled_total if filled_total else 0
         return {"order_number": last_order, "requested_quantity": quantity, "filled_quantity": filled_total,
                 "remaining_quantity": quantity - filled_total, "average_price": avg, "attempts": attempts}
