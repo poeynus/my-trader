@@ -4,7 +4,7 @@ import json
 import math
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, time as clock_time, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -46,7 +46,45 @@ class AutoTrader:
     def _intraday(self, market: str) -> Dict[str, Any]:
         zone = ZoneInfo("Asia/Seoul") if market == "kr" else ZoneInfo("America/New_York")
         key = market + ":" + datetime.now(zone).date().isoformat()
-        return self.state["intraday"].setdefault(key, {"realized_pnl": 0.0, "round_trips": {}, "last_exit": {}})
+        intraday = self.state["intraday"].setdefault(key, {"realized_pnl": 0.0, "round_trips": {}, "last_exit": {}})
+        if "entry_count" not in intraday:
+            intraday["entry_count"] = self._logged_entry_count(market, key.split(":", 1)[1])
+        return intraday
+
+    def _logged_entry_count(self, market: str, day: str) -> int:
+        path = self.log_path or (Path("logs/trades") / f"{day}-{market}.jsonl")
+        count = 0
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (FileNotFoundError, OSError):
+            return 0
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            order = event.get("order") if isinstance(event.get("order"), dict) else {}
+            filled = int(float(order.get("filled_quantity") or 0))
+            if order.get("simulated"):
+                filled = int(float(event.get("quantity") or 0))
+            if event.get("market") == market and event.get("action") == "buy" and filled > 0:
+                count += 1
+        return count
+
+    def _session_entry_quota(self, market: str) -> int:
+        zone = ZoneInfo("Asia/Seoul") if market == "kr" else ZoneInfo("America/New_York")
+        current = datetime.now(zone).time()
+        if market == "kr":
+            early, middle, late = clock_time(10, 0), clock_time(12, 0), clock_time(14, 0)
+        else:
+            early, middle, late = clock_time(10, 30), clock_time(12, 30), clock_time(14, 30)
+        if current < early:
+            return self.config.max_entries_early_session
+        if current < middle:
+            return self.config.max_entries_mid_session
+        if current < late:
+            return self.config.max_entries_late_session
+        return self.config.max_daily_round_trips_per_market
 
     def record_exit(self, item: SymbolConfig, average_price: float, quantity: int, exit_price: float) -> None:
         with STATE_LOCK:
@@ -241,8 +279,10 @@ class AutoTrader:
                 return {**base, "action": "hold", "reason": "daily_loss_limit"}
             if int(intraday["round_trips"].get(item.symbol, 0)) >= self.config.max_round_trips_per_symbol:
                 return {**base, "action": "hold", "reason": "round_trip_limit"}
-            if sum(int(x) for x in intraday["round_trips"].values()) >= self.config.max_daily_round_trips_per_market:
+            if int(intraday["entry_count"]) >= self.config.max_daily_round_trips_per_market:
                 return {**base, "action": "hold", "reason": "market_round_trip_limit"}
+            if int(intraday["entry_count"]) >= self._session_entry_quota(item.market):
+                return {**base, "action": "hold", "reason": "session_entry_quota"}
             last_exit = intraday["last_exit"].get(item.symbol)
             if last_exit:
                 elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last_exit)).total_seconds()
@@ -282,6 +322,7 @@ class AutoTrader:
             order_result = self.client.us_order(action, item.symbol, item.exchange, quantity, limit_price, confirm_live)
         filled = quantity if mode == "dry_run" else int(order_result.get("filled_quantity", 0))
         if action == "buy" and filled > 0:
+            self._intraday(item.market)["entry_count"] = int(self._intraday(item.market)["entry_count"]) + 1
             self.state["position_meta"][key] = {"opened_at": datetime.now(timezone.utc).isoformat(), "peak_profit_percent": 0.0}
             if mode == "live":
                 positions[key] = {"quantity": filled, "average_price": float(order_result.get("average_price") or limit_price)}

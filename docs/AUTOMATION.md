@@ -121,7 +121,10 @@ KIS_ENABLE_REAL_TRADING=false
   "max_active_investment_usd": 140,
   "reentry_cooldown_seconds": 60,
   "max_round_trips_per_symbol": 1,
-  "max_daily_round_trips_per_market": 5,
+  "max_daily_round_trips_per_market": 12,
+  "max_entries_early_session": 4,
+  "max_entries_mid_session": 7,
+  "max_entries_late_session": 10,
   "max_daily_loss_krw": 3000,
   "max_daily_loss_usd": 2,
   "time_stop_minutes": 15,
@@ -142,7 +145,7 @@ KIS_ENABLE_REAL_TRADING=false
 }
 ```
 
-`max_active_investment_*`는 하루 누적 매수액이 아니라 동시에 보유할 수 있는 원가 합계입니다. 매도 체결 후에는 한도가 복구됩니다. 현재 제한된 실전 검증 설정은 종목별 하루 왕복 1회, 시장 전체 하루 왕복 5회, 국내 일일 확정손실 3천 원·미국 2달러 도달 시 신규 진입 중단입니다. 한 번 청산한 종목은 당일 후보에서 제외하고 다음 거래일에 다시 허용합니다. 손실 한도는 미실현 손익이 아니라 프로그램이 확인한 당일 매도 체결 손익을 기준으로 합니다.
+`max_active_investment_*`는 하루 누적 매수액이 아니라 동시에 보유할 수 있는 원가 합계입니다. 매도 체결 후에는 한도가 복구됩니다. 현재 제한된 실전 검증 설정은 종목별 하루 왕복 1회, 시장 전체 하루 진입 12회, 국내 일일 확정손실 3천 원·미국 2달러 도달 시 신규 진입 중단입니다. 국내 신규 진입은 10시 전 4회, 12시 전 누적 7회, 14시 전 누적 10회, 이후 12회로 분산합니다. 미국은 각각 10:30, 12:30, 14:30 ET를 경계로 같은 한도를 적용합니다. 한 번 청산한 종목은 당일 후보에서 제외하고 다음 거래일에 다시 허용합니다. 손실 한도는 미실현 손익이 아니라 프로그램이 확인한 당일 매도 체결 손익을 기준으로 합니다.
 
 현재 시장별 모드는 다음처럼 미국만 실전으로 분리할 수 있습니다.
 

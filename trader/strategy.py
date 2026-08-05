@@ -44,6 +44,9 @@ class StrategyConfig:
     reentry_cooldown_seconds: int
     max_round_trips_per_symbol: int
     max_daily_round_trips_per_market: int
+    max_entries_early_session: int
+    max_entries_mid_session: int
+    max_entries_late_session: int
     max_daily_loss_krw: float
     max_daily_loss_usd: float
     time_stop_minutes: int
@@ -91,6 +94,9 @@ class StrategyConfig:
                 reentry_cooldown_seconds=int(data.get("reentry_cooldown_seconds", 300)),
                 max_round_trips_per_symbol=int(data.get("max_round_trips_per_symbol", 3)),
                 max_daily_round_trips_per_market=int(data.get("max_daily_round_trips_per_market", 15)),
+                max_entries_early_session=int(data.get("max_entries_early_session", 4)),
+                max_entries_mid_session=int(data.get("max_entries_mid_session", 7)),
+                max_entries_late_session=int(data.get("max_entries_late_session", 10)),
                 max_daily_loss_krw=float(data.get("max_daily_loss_krw", 10000)),
                 max_daily_loss_usd=float(data.get("max_daily_loss_usd", 10)),
                 time_stop_minutes=int(data.get("time_stop_minutes", 15)),
@@ -140,6 +146,9 @@ class StrategyConfig:
             raise StrategyError("종목별 하루 왕복 횟수는 1~20회여야 합니다.")
         if not (1 <= self.max_daily_round_trips_per_market <= 50):
             raise StrategyError("시장별 하루 총 왕복 횟수는 1~50회여야 합니다.")
+        if not (1 <= self.max_entries_early_session <= self.max_entries_mid_session
+                <= self.max_entries_late_session <= self.max_daily_round_trips_per_market):
+            raise StrategyError("시간대별 진입 한도는 전체 한도 이하의 오름차순이어야 합니다.")
         if self.max_daily_loss_krw <= 0 or self.max_daily_loss_usd <= 0:
             raise StrategyError("일일 손실 한도는 0보다 커야 합니다.")
         if not (1 <= self.time_stop_minutes <= 240 and self.time_stop_loss_percent >= 0):
