@@ -50,8 +50,8 @@ class AutoTraderTests(unittest.TestCase):
 
     def test_time_stop_releases_stale_losing_position(self):
         with tempfile.TemporaryDirectory() as directory:
-            opened = datetime.now(timezone.utc) - timedelta(minutes=16)
-            result = self._trader(directory, 99.6, opened_at=opened).run_once()[0]
+            opened = datetime.now(timezone.utc) - timedelta(minutes=31)
+            result = self._trader(directory, 99.1, opened_at=opened).run_once()[0]
         self.assertEqual((result["action"], result["reason"]), ("sell", "time_stop"))
 
     def test_overnight_position_exits_before_other_rules(self):
