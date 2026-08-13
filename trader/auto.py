@@ -41,12 +41,16 @@ class AutoTrader:
         state.setdefault("intraday", {})
         state.setdefault("position_meta", {})
         state.setdefault("price_samples", {})
+        state.setdefault("entry_setups", {})
         return state
 
     def _intraday(self, market: str) -> Dict[str, Any]:
         zone = ZoneInfo("Asia/Seoul") if market == "kr" else ZoneInfo("America/New_York")
         key = market + ":" + datetime.now(zone).date().isoformat()
-        intraday = self.state["intraday"].setdefault(key, {"realized_pnl": 0.0, "round_trips": {}, "last_exit": {}})
+        intraday = self.state["intraday"].setdefault(key, {"realized_pnl": 0.0, "estimated_costs": 0.0,
+                                                           "round_trips": {}, "last_exit": {}, "blocked_symbols": {}})
+        intraday.setdefault("estimated_costs", 0.0)
+        intraday.setdefault("blocked_symbols", {})
         if "entry_count" not in intraday:
             intraday["entry_count"] = self._logged_entry_count(market, key.split(":", 1)[1])
         return intraday
@@ -94,6 +98,15 @@ class AutoTrader:
     def _record_exit(self, item: SymbolConfig, average_price: float, quantity: int, exit_price: float) -> None:
         intraday = self._intraday(item.market)
         intraday["realized_pnl"] = float(intraday["realized_pnl"]) + (exit_price - average_price) * quantity
+        if item.market == "kr":
+            buy_rate = self.config.estimated_commission_percent_kr
+            sell_rate = self.config.estimated_commission_percent_kr + self.config.estimated_sell_cost_percent_kr
+        else:
+            buy_rate = self.config.estimated_commission_percent_us
+            sell_rate = self.config.estimated_commission_percent_us + self.config.estimated_sell_cost_percent_us
+        intraday["estimated_costs"] = float(intraday["estimated_costs"]) + (
+            average_price * quantity * buy_rate / 100 + exit_price * quantity * sell_rate / 100
+        )
         intraday["round_trips"][item.symbol] = int(intraday["round_trips"].get(item.symbol, 0)) + 1
         intraday["last_exit"][item.symbol] = datetime.now(timezone.utc).isoformat()
         self._save_state()
@@ -123,6 +136,8 @@ class AutoTrader:
                 result = self._evaluate(item, positions, confirm_live, allow_new_entries, force_exit)
             except Exception as exc:
                 result = {"market": item.market, "symbol": item.symbol, "action": "error", "reason": str(exc)}
+                if any(text in str(exc) for text in ("주문 가능 수량이 0주", "해외ETP 거래 미신청")):
+                    self._intraday(item.market)["blocked_symbols"][item.symbol] = str(exc)
             self._log(result)
             results.append(result)
         self._save_state()
@@ -182,7 +197,7 @@ class AutoTrader:
         samples.append({"time": now.isoformat(), "price": current, "volume": volume})
         samples[:] = [x for x in samples if datetime.fromisoformat(x["time"]).timestamp() >= cutoff][-60:]
         result = {"ready": False, "momentum_percent": 0.0, "sample_count": len(samples),
-                  "volume_rising": False, "breakout": False}
+                  "volume_rising": False, "setup_phase": "scanning"}
         if len(samples) < self.config.intraday_entry_min_samples:
             result["reason"] = "intraday_warmup"
             return result
@@ -193,24 +208,77 @@ class AutoTrader:
             return result
         start_price = float(first["price"])
         momentum = (current / start_price - 1) * 100 if start_price else 0.0
-        previous_high = max(float(x["price"]) for x in samples[:-1])
-        volume_rising = volume <= 0 or float(first.get("volume") or 0) <= 0 or volume > float(first["volume"])
-        breakout = current >= previous_high
+        volumes = [float(x.get("volume") or 0) for x in samples]
+        previous_interval = volumes[-2] - volumes[-3] if len(volumes) >= 3 else 0
+        latest_interval = volumes[-1] - volumes[-2] if len(volumes) >= 2 else 0
+        volume_rising = volume <= 0 or (latest_interval > 0 and latest_interval >= previous_interval)
         result.update({"momentum_percent": momentum, "volume_rising": volume_rising,
-                       "breakout": breakout, "elapsed_seconds": elapsed})
+                       "elapsed_seconds": elapsed})
+        market = key.split(":", 1)[0]
+        max_momentum = (self.config.intraday_entry_max_momentum_percent_kr if market == "kr"
+                        else self.config.intraday_entry_max_momentum_percent_us)
+        setup = self.state["entry_setups"].get(key)
+        if setup:
+            updated_at = datetime.fromisoformat(str(setup.get("updated_at", now.isoformat())))
+            if (now - updated_at).total_seconds() > self.config.intraday_entry_lookback_seconds:
+                self.state["entry_setups"].pop(key, None)
+                setup = None
         if daily_change_percent <= 0:
+            self.state["entry_setups"].pop(key, None)
             result["reason"] = "intraday_daily_change_not_positive"
         elif current < slow_ma:
+            self.state["entry_setups"].pop(key, None)
             result["reason"] = "intraday_below_daily_support"
-        elif momentum < self.config.intraday_entry_momentum_percent:
-            result["reason"] = "intraday_no_momentum"
-        elif not breakout:
-            result["reason"] = "intraday_no_breakout"
-        elif not volume_rising:
-            result["reason"] = "intraday_volume_not_rising"
+        elif momentum > max_momentum:
+            self.state["entry_setups"].pop(key, None)
+            result["reason"] = "intraday_overextended"
         else:
-            result.update({"ready": True, "reason": "intraday_momentum"})
+            if setup is None:
+                if momentum < self.config.intraday_entry_momentum_percent:
+                    result["reason"] = "intraday_no_momentum"
+                else:
+                    setup = {"phase": "armed", "peak": current, "pullback_low": current,
+                             "confirmations": 0, "updated_at": now.isoformat()}
+                    self.state["entry_setups"][key] = setup
+                    result.update({"reason": "intraday_wait_pullback", "setup_phase": "armed"})
+            else:
+                setup["updated_at"] = now.isoformat()
+                setup["peak"] = max(float(setup["peak"]), current)
+                drawdown = (1 - current / float(setup["peak"])) * 100
+                if setup["phase"] == "armed":
+                    if drawdown > self.config.intraday_pullback_max_percent:
+                        self.state["entry_setups"].pop(key, None)
+                        result["reason"] = "intraday_pullback_too_deep"
+                    elif drawdown >= self.config.intraday_pullback_min_percent:
+                        setup.update({"phase": "pulled_back", "pullback_low": current, "confirmations": 0})
+                        result.update({"reason": "intraday_wait_reclaim", "setup_phase": "pulled_back"})
+                    else:
+                        result.update({"reason": "intraday_wait_pullback", "setup_phase": "armed"})
+                else:
+                    setup["pullback_low"] = min(float(setup["pullback_low"]), current)
+                    if (1 - current / float(setup["peak"])) * 100 > self.config.intraday_pullback_max_percent:
+                        self.state["entry_setups"].pop(key, None)
+                        result["reason"] = "intraday_pullback_too_deep"
+                    else:
+                        reclaim_price = float(setup["peak"]) * (1 - self.config.intraday_reclaim_buffer_percent / 100)
+                        setup["confirmations"] = int(setup.get("confirmations", 0)) + 1 if current >= reclaim_price else 0
+                        if int(setup["confirmations"]) < self.config.intraday_reclaim_confirmations:
+                            result.update({"reason": "intraday_wait_reclaim", "setup_phase": "pulled_back"})
+                        elif not volume_rising:
+                            result.update({"reason": "intraday_volume_not_rising", "setup_phase": "pulled_back"})
+                        else:
+                            self.state["entry_setups"].pop(key, None)
+                            result.update({"ready": True, "reason": "intraday_pullback_reclaim",
+                                           "setup_phase": "confirmed"})
         return result
+
+    def _entry_delay_active(self, market: str) -> bool:
+        zone = ZoneInfo("Asia/Seoul") if market == "kr" else ZoneInfo("America/New_York")
+        now = datetime.now(zone)
+        opened = clock_time(9, 0) if market == "kr" else clock_time(9, 30)
+        delay = self.config.entry_delay_minutes_kr if market == "kr" else self.config.entry_delay_minutes_us
+        minutes = (now.hour * 60 + now.minute) - (opened.hour * 60 + opened.minute)
+        return 0 <= minutes < delay
 
     def _evaluate(self, item: SymbolConfig, positions: Dict[str, Any], confirm_live: bool,
                   allow_new_entries: bool, force_exit: bool) -> Dict[str, Any]:
@@ -231,9 +299,13 @@ class AutoTrader:
         # 마감 청산은 일봉 조회 실패와 무관하게 반드시 주문까지 진행한다.
         ma = {"signal": "hold", "fast": 0.0, "slow": 0.0} if force_exit and position else self._ma(item)
         action, reason, profit_percent = "hold", str(ma["signal"]), None
+        opening_delay = not position and allow_new_entries and self._entry_delay_active(item.market)
         intraday_signal = self._intraday_entry_signal(
             key, current, volume, daily_change_percent, float(ma["slow"])
-        ) if not position and allow_new_entries else {"ready": False, "momentum_percent": 0.0, "sample_count": 0}
+        ) if not position and allow_new_entries and not opening_delay else {
+            "ready": False, "momentum_percent": 0.0, "sample_count": 0,
+            "reason": "entry_opening_delay" if opening_delay else "hold",
+        }
         if position:
             average = float(position["average_price"])
             profit_percent = (current / average - 1) * 100 if average else 0
@@ -259,10 +331,11 @@ class AutoTrader:
             elif ma["signal"] == "cross_down":
                 action, reason = "sell", "cross_down"
         elif allow_new_entries:
-            # 일봉은 현재가가 장기 평균 위인지 확인하는 보조 필터로만 쓰고,
-            # 실제 진입은 짧은 구간의 상승과 직전 고점 돌파로 결정한다.
-            if intraday_signal["ready"]:
-                action, reason = "buy", "intraday_momentum"
+            # 상승을 바로 추격하지 않고 눌림과 재상승이 연속 확인된 경우에만 진입한다.
+            if opening_delay:
+                reason = "entry_opening_delay"
+            elif intraday_signal["ready"]:
+                action, reason = "buy", "intraday_pullback_reclaim"
             else:
                 reason = str(intraday_signal.get("reason", "hold"))
         base = {"market": item.market, "symbol": item.symbol, "price": current, "profit_percent": profit_percent,
@@ -275,12 +348,18 @@ class AutoTrader:
         if action == "buy":
             intraday = self._intraday(item.market)
             loss_limit = self.config.max_daily_loss_krw if item.market == "kr" else self.config.max_daily_loss_usd
-            if float(intraday["realized_pnl"]) <= -loss_limit:
+            net_realized = float(intraday["realized_pnl"]) - float(intraday.get("estimated_costs", 0))
+            market_entry_limit = self.config.max_daily_entries_kr if item.market == "kr" else self.config.max_daily_entries_us
+            if net_realized <= -loss_limit:
                 return {**base, "action": "hold", "reason": "daily_loss_limit"}
+            if item.symbol in intraday.get("blocked_symbols", {}):
+                return {**base, "action": "hold", "reason": "symbol_blocked_after_order_error"}
             if int(intraday["round_trips"].get(item.symbol, 0)) >= self.config.max_round_trips_per_symbol:
                 return {**base, "action": "hold", "reason": "round_trip_limit"}
             if int(intraday["entry_count"]) >= self.config.max_daily_round_trips_per_market:
                 return {**base, "action": "hold", "reason": "market_round_trip_limit"}
+            if int(intraday["entry_count"]) >= market_entry_limit:
+                return {**base, "action": "hold", "reason": "market_entry_limit"}
             if int(intraday["entry_count"]) >= self._session_entry_quota(item.market):
                 return {**base, "action": "hold", "reason": "session_entry_quota"}
             last_exit = intraday["last_exit"].get(item.symbol)

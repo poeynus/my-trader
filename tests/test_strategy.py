@@ -18,6 +18,7 @@ class StrategyTests(unittest.TestCase):
         config = StrategyConfig.load(Path("strategy.json"))
         self.assertEqual(config.mode_for("kr"), "live")
         self.assertEqual(config.mode_for("us"), "live")
+        self.assertTrue(config.has_live_market)
 
     def test_cross_up(self):
         oldest_first = [10, 10, 10, 10, 10, 9, 12]

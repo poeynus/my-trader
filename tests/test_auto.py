@@ -54,13 +54,18 @@ class AutoTraderTests(unittest.TestCase):
             result = self._trader(directory, 99.1, opened_at=opened).run_once()[0]
         self.assertEqual((result["action"], result["reason"]), ("sell", "time_stop"))
 
+    def test_one_percent_stop_loss(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._trader(directory, 98.9).run_once()[0]
+        self.assertEqual((result["action"], result["reason"]), ("sell", "stop_loss"))
+
     def test_overnight_position_exits_before_other_rules(self):
         with tempfile.TemporaryDirectory() as directory:
             opened = datetime.now(timezone.utc) - timedelta(days=1)
             result = self._trader(directory, 100.1, opened_at=opened).run_once()[0]
         self.assertEqual((result["action"], result["reason"]), ("sell", "overnight_exit"))
 
-    def test_intraday_momentum_accepts_breakout_above_daily_support(self):
+    def test_intraday_entry_waits_for_pullback_then_confirms_reclaim(self):
         with tempfile.TemporaryDirectory() as directory:
             trader = self._trader(directory, 100)
             key = "kr:005930"
@@ -69,9 +74,15 @@ class AutoTraderTests(unittest.TestCase):
                 {"time": (now - timedelta(seconds=120)).isoformat(), "price": 100, "volume": 1000},
                 {"time": (now - timedelta(seconds=60)).isoformat(), "price": 100.1, "volume": 1100},
             ]}
-            signal = trader._intraday_entry_signal(key, 101.0, 1200, 1.0, 99.0)
-        self.assertTrue(signal["ready"])
-        self.assertEqual(signal["reason"], "intraday_momentum")
+            armed = trader._intraday_entry_signal(key, 100.8, 1200, 1.0, 99.0)
+            pulled_back = trader._intraday_entry_signal(key, 100.4, 1300, 1.0, 99.0)
+            first_reclaim = trader._intraday_entry_signal(key, 100.72, 1450, 1.0, 99.0)
+            confirmed = trader._intraday_entry_signal(key, 100.75, 1650, 1.0, 99.0)
+        self.assertEqual(armed["reason"], "intraday_wait_pullback")
+        self.assertEqual(pulled_back["reason"], "intraday_wait_reclaim")
+        self.assertFalse(first_reclaim["ready"])
+        self.assertTrue(confirmed["ready"])
+        self.assertEqual(confirmed["reason"], "intraday_pullback_reclaim")
 
     def test_intraday_momentum_keeps_daily_average_as_support_filter(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -82,9 +93,22 @@ class AutoTraderTests(unittest.TestCase):
                 {"time": (now - timedelta(seconds=120)).isoformat(), "price": 100, "volume": 1000},
                 {"time": (now - timedelta(seconds=60)).isoformat(), "price": 100.1, "volume": 1100},
             ]}
-            signal = trader._intraday_entry_signal(key, 100.4, 1200, 1.0, 101.0)
+            signal = trader._intraday_entry_signal(key, 100.8, 1200, 1.0, 101.0)
         self.assertFalse(signal["ready"])
         self.assertEqual(signal["reason"], "intraday_below_daily_support")
+
+    def test_intraday_entry_rejects_overextended_move(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trader = self._trader(directory, 100)
+            key = "kr:005930"
+            now = datetime.now(timezone.utc)
+            trader.state["price_samples"] = {key: [
+                {"time": (now - timedelta(seconds=120)).isoformat(), "price": 100, "volume": 1000},
+                {"time": (now - timedelta(seconds=60)).isoformat(), "price": 100.5, "volume": 1100},
+            ]}
+            signal = trader._intraday_entry_signal(key, 101.6, 1300, 2.0, 99.0)
+        self.assertFalse(signal["ready"])
+        self.assertEqual(signal["reason"], "intraday_overextended")
 
 
 if __name__ == "__main__":

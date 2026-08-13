@@ -83,7 +83,7 @@ API 요청은 호출 제한을 피하기 위해 기본 1초 간격으로 실행�
 
 - `fast_period`, `slow_period`: 진입·청산 이동평균
 - `take_profit_percent`: 평균 매수가 대비 익절률(기본 2.5%)
-- `stop_loss_percent`: 평균 매수가 대비 손절률(기본 1.5%)
+- `stop_loss_percent`: 평균 매수가 대비 손절률(현재 1.0%)
 - `max_position`: 종목당 최대 매수금액(국내 KRW, 미국 USD)
 - `selected_per_market`: 국내·미국에서 각각 자동 선정할 종목 수
 - `default_position_krw`, `default_position_usd`: 자동 선정 종목의 최대 매수금액

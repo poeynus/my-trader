@@ -58,6 +58,16 @@ class StrategyConfig:
     intraday_entry_lookback_seconds: int
     intraday_entry_min_samples: int
     intraday_entry_momentum_percent: float
+    intraday_entry_max_momentum_percent_kr: float
+    intraday_entry_max_momentum_percent_us: float
+    intraday_pullback_min_percent: float
+    intraday_pullback_max_percent: float
+    intraday_reclaim_buffer_percent: float
+    intraday_reclaim_confirmations: int
+    entry_delay_minutes_kr: int
+    entry_delay_minutes_us: int
+    max_daily_entries_kr: int
+    max_daily_entries_us: int
     estimated_commission_percent_kr: float
     estimated_sell_cost_percent_kr: float
     estimated_commission_percent_us: float
@@ -108,6 +118,16 @@ class StrategyConfig:
                 intraday_entry_lookback_seconds=int(data.get("intraday_entry_lookback_seconds", 180)),
                 intraday_entry_min_samples=int(data.get("intraday_entry_min_samples", 3)),
                 intraday_entry_momentum_percent=float(data.get("intraday_entry_momentum_percent", 0.3)),
+                intraday_entry_max_momentum_percent_kr=float(data.get("intraday_entry_max_momentum_percent_kr", 1.5)),
+                intraday_entry_max_momentum_percent_us=float(data.get("intraday_entry_max_momentum_percent_us", 1.8)),
+                intraday_pullback_min_percent=float(data.get("intraday_pullback_min_percent", 0.2)),
+                intraday_pullback_max_percent=float(data.get("intraday_pullback_max_percent", 0.6)),
+                intraday_reclaim_buffer_percent=float(data.get("intraday_reclaim_buffer_percent", 0.1)),
+                intraday_reclaim_confirmations=int(data.get("intraday_reclaim_confirmations", 2)),
+                entry_delay_minutes_kr=int(data.get("entry_delay_minutes_kr", 15)),
+                entry_delay_minutes_us=int(data.get("entry_delay_minutes_us", 20)),
+                max_daily_entries_kr=int(data.get("max_daily_entries_kr", 4)),
+                max_daily_entries_us=int(data.get("max_daily_entries_us", 2)),
                 estimated_commission_percent_kr=float(data.get("estimated_commission_percent_kr", 0.0140527)),
                 estimated_sell_cost_percent_kr=float(data.get("estimated_sell_cost_percent_kr", 0.15)),
                 estimated_commission_percent_us=float(data.get("estimated_commission_percent_us", 0.25)),
@@ -161,6 +181,17 @@ class StrategyConfig:
                 and 2 <= self.intraday_entry_min_samples <= 20
                 and 0.05 <= self.intraday_entry_momentum_percent <= 5):
             raise StrategyError("장중 진입 신호 설정을 확인하세요.")
+        if not (self.intraday_entry_momentum_percent < self.intraday_entry_max_momentum_percent_kr <= 5
+                and self.intraday_entry_momentum_percent < self.intraday_entry_max_momentum_percent_us <= 5):
+            raise StrategyError("시장별 장중 최대 모멘텀 설정을 확인하세요.")
+        if not (0 < self.intraday_pullback_min_percent < self.intraday_pullback_max_percent <= 3
+                and 0 <= self.intraday_reclaim_buffer_percent < self.intraday_pullback_min_percent
+                and 1 <= self.intraday_reclaim_confirmations <= 5):
+            raise StrategyError("눌림·재상승 진입 설정을 확인하세요.")
+        if not (0 <= self.entry_delay_minutes_kr <= 120 and 0 <= self.entry_delay_minutes_us <= 120
+                and 1 <= self.max_daily_entries_kr <= self.max_daily_round_trips_per_market
+                and 1 <= self.max_daily_entries_us <= self.max_daily_round_trips_per_market):
+            raise StrategyError("시장별 진입 대기시간과 일일 진입 한도를 확인하세요.")
         if any(x < 0 or x > 5 for x in (
                 self.estimated_commission_percent_kr, self.estimated_sell_cost_percent_kr,
                 self.estimated_commission_percent_us, self.estimated_sell_cost_percent_us)):
