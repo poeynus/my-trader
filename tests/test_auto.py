@@ -4,6 +4,7 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from trader.auto import AutoTrader, DAILY_CACHE
 from trader.strategy import StrategyConfig, SymbolConfig
@@ -109,6 +110,22 @@ class AutoTraderTests(unittest.TestCase):
             signal = trader._intraday_entry_signal(key, 101.6, 1300, 2.0, 99.0)
         self.assertFalse(signal["ready"])
         self.assertEqual(signal["reason"], "intraday_overextended")
+
+    def test_kr_entry_window_closes_at_ten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trader = self._trader(directory, 100)
+            before = datetime(2026, 9, 2, 9, 59, tzinfo=ZoneInfo("Asia/Seoul"))
+            cutoff = datetime(2026, 9, 2, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+            self.assertFalse(trader._entry_window_closed("kr", before))
+            self.assertTrue(trader._entry_window_closed("kr", cutoff))
+
+    def test_first_cost_adjusted_loss_blocks_second_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trader = self._trader(directory, 100)
+            trader.state["intraday"] = {}
+            trader._record_exit(self.item, 100000, 1, 100100)
+            intraday = trader._intraday("kr")
+        self.assertLess(intraday["first_exit_net_pnl"], 0)
 
 
 if __name__ == "__main__":

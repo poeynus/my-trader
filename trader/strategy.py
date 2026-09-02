@@ -66,6 +66,7 @@ class StrategyConfig:
     intraday_reclaim_confirmations: int
     entry_delay_minutes_kr: int
     entry_delay_minutes_us: int
+    entry_cutoff_minutes_kr: int
     max_daily_entries_kr: int
     max_daily_entries_us: int
     estimated_commission_percent_kr: float
@@ -126,6 +127,7 @@ class StrategyConfig:
                 intraday_reclaim_confirmations=int(data.get("intraday_reclaim_confirmations", 2)),
                 entry_delay_minutes_kr=int(data.get("entry_delay_minutes_kr", 15)),
                 entry_delay_minutes_us=int(data.get("entry_delay_minutes_us", 20)),
+                entry_cutoff_minutes_kr=int(data.get("entry_cutoff_minutes_kr", 60)),
                 max_daily_entries_kr=int(data.get("max_daily_entries_kr", 4)),
                 max_daily_entries_us=int(data.get("max_daily_entries_us", 2)),
                 estimated_commission_percent_kr=float(data.get("estimated_commission_percent_kr", 0.0140527)),
@@ -188,7 +190,8 @@ class StrategyConfig:
                 and 0 <= self.intraday_reclaim_buffer_percent < self.intraday_pullback_min_percent
                 and 1 <= self.intraday_reclaim_confirmations <= 5):
             raise StrategyError("눌림·재상승 진입 설정을 확인하세요.")
-        if not (0 <= self.entry_delay_minutes_kr <= 120 and 0 <= self.entry_delay_minutes_us <= 120
+        if not (0 <= self.entry_delay_minutes_kr < self.entry_cutoff_minutes_kr <= 360
+                and 0 <= self.entry_delay_minutes_us <= 120
                 and 1 <= self.max_daily_entries_kr <= self.max_daily_round_trips_per_market
                 and 1 <= self.max_daily_entries_us <= self.max_daily_round_trips_per_market):
             raise StrategyError("시장별 진입 대기시간과 일일 진입 한도를 확인하세요.")

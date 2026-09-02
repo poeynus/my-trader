@@ -51,6 +51,7 @@ class AutoTrader:
                                                            "round_trips": {}, "last_exit": {}, "blocked_symbols": {}})
         intraday.setdefault("estimated_costs", 0.0)
         intraday.setdefault("blocked_symbols", {})
+        intraday.setdefault("first_exit_net_pnl", None)
         if "entry_count" not in intraday:
             intraday["entry_count"] = self._logged_entry_count(market, key.split(":", 1)[1])
         return intraday
@@ -97,16 +98,18 @@ class AutoTrader:
 
     def _record_exit(self, item: SymbolConfig, average_price: float, quantity: int, exit_price: float) -> None:
         intraday = self._intraday(item.market)
-        intraday["realized_pnl"] = float(intraday["realized_pnl"]) + (exit_price - average_price) * quantity
+        trade_pnl = (exit_price - average_price) * quantity
+        intraday["realized_pnl"] = float(intraday["realized_pnl"]) + trade_pnl
         if item.market == "kr":
             buy_rate = self.config.estimated_commission_percent_kr
             sell_rate = self.config.estimated_commission_percent_kr + self.config.estimated_sell_cost_percent_kr
         else:
             buy_rate = self.config.estimated_commission_percent_us
             sell_rate = self.config.estimated_commission_percent_us + self.config.estimated_sell_cost_percent_us
-        intraday["estimated_costs"] = float(intraday["estimated_costs"]) + (
-            average_price * quantity * buy_rate / 100 + exit_price * quantity * sell_rate / 100
-        )
+        trade_cost = average_price * quantity * buy_rate / 100 + exit_price * quantity * sell_rate / 100
+        intraday["estimated_costs"] = float(intraday["estimated_costs"]) + trade_cost
+        if intraday.get("first_exit_net_pnl") is None:
+            intraday["first_exit_net_pnl"] = trade_pnl - trade_cost
         intraday["round_trips"][item.symbol] = int(intraday["round_trips"].get(item.symbol, 0)) + 1
         intraday["last_exit"][item.symbol] = datetime.now(timezone.utc).isoformat()
         self._save_state()
@@ -280,6 +283,15 @@ class AutoTrader:
         minutes = (now.hour * 60 + now.minute) - (opened.hour * 60 + opened.minute)
         return 0 <= minutes < delay
 
+    def _entry_window_closed(self, market: str, now: Optional[datetime] = None) -> bool:
+        if market != "kr":
+            return False
+        zone = ZoneInfo("Asia/Seoul")
+        current = now.astimezone(zone) if now else datetime.now(zone)
+        opened_minutes = 9 * 60
+        elapsed = current.hour * 60 + current.minute - opened_minutes
+        return elapsed >= self.config.entry_cutoff_minutes_kr
+
     def _evaluate(self, item: SymbolConfig, positions: Dict[str, Any], confirm_live: bool,
                   allow_new_entries: bool, force_exit: bool) -> Dict[str, Any]:
         key = item.market + ":" + item.symbol
@@ -300,11 +312,13 @@ class AutoTrader:
         ma = {"signal": "hold", "fast": 0.0, "slow": 0.0} if force_exit and position else self._ma(item)
         action, reason, profit_percent = "hold", str(ma["signal"]), None
         opening_delay = not position and allow_new_entries and self._entry_delay_active(item.market)
+        entry_window_closed = not position and allow_new_entries and self._entry_window_closed(item.market)
         intraday_signal = self._intraday_entry_signal(
             key, current, volume, daily_change_percent, float(ma["slow"])
-        ) if not position and allow_new_entries and not opening_delay else {
+        ) if not position and allow_new_entries and not opening_delay and not entry_window_closed else {
             "ready": False, "momentum_percent": 0.0, "sample_count": 0,
-            "reason": "entry_opening_delay" if opening_delay else "hold",
+            "reason": "entry_opening_delay" if opening_delay else (
+                "entry_window_closed" if entry_window_closed else "hold"),
         }
         if position:
             average = float(position["average_price"])
@@ -334,6 +348,8 @@ class AutoTrader:
             # 상승을 바로 추격하지 않고 눌림과 재상승이 연속 확인된 경우에만 진입한다.
             if opening_delay:
                 reason = "entry_opening_delay"
+            elif entry_window_closed:
+                reason = "entry_window_closed"
             elif intraday_signal["ready"]:
                 action, reason = "buy", "intraday_pullback_reclaim"
             else:
@@ -352,6 +368,8 @@ class AutoTrader:
             market_entry_limit = self.config.max_daily_entries_kr if item.market == "kr" else self.config.max_daily_entries_us
             if net_realized <= -loss_limit:
                 return {**base, "action": "hold", "reason": "daily_loss_limit"}
+            if intraday.get("first_exit_net_pnl") is not None and float(intraday["first_exit_net_pnl"]) < 0:
+                return {**base, "action": "hold", "reason": "first_trade_loss_limit"}
             if item.symbol in intraday.get("blocked_symbols", {}):
                 return {**base, "action": "hold", "reason": "symbol_blocked_after_order_error"}
             if int(intraday["round_trips"].get(item.symbol, 0)) >= self.config.max_round_trips_per_symbol:

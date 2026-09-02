@@ -14,10 +14,10 @@ class StrategyTests(unittest.TestCase):
             config = StrategyConfig.load(path)
         self.assertEqual(config.symbols, [])
 
-    def test_live_markets_enable_both_markets(self):
+    def test_only_kr_market_is_live(self):
         config = StrategyConfig.load(Path("strategy.json"))
         self.assertEqual(config.mode_for("kr"), "live")
-        self.assertEqual(config.mode_for("us"), "live")
+        self.assertEqual(config.mode_for("us"), "dry_run")
         self.assertTrue(config.has_live_market)
 
     def test_cross_up(self):
